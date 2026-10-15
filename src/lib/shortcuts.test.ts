@@ -4,6 +4,7 @@ import { buffers } from './editor/buffers.svelte';
 import { setFindInFiles } from './editor/search.svelte';
 import { answersHere, ariaEnter, enterAnswer, handleShortcut, holdPrint, isAppShortcut, optionAnswer } from './shortcuts';
 import { app } from './state.svelte';
+import { voice } from './voice.svelte';
 
 const key = (k: string, mods: Partial<KeyboardEventInit> = {}) => new KeyboardEvent('keydown', { key: k, ctrlKey: true, ...mods });
 
@@ -26,6 +27,34 @@ describe('handleShortcut', () => {
     expect(app.project?.id).toBe('p2');
     expect(handleShortcut(key('&', { code: 'Digit1' }))).toBe(true);
     expect(app.project?.id).toBe('p1');
+  });
+
+  it('starts and stops a dictation for the agent shown with Ctrl+Shift+M', async () => {
+    voice.reset();
+    const backend = fakeBackend({ voice_models: () => [{ id: 'small-q5_1', bytes: 1, installed: true }], voice_stop: () => '' });
+    app.selectAgent('a1');
+    expect(handleShortcut(key('M', { shiftKey: true }))).toBe(true);
+    await vi.waitFor(() => expect(voice.phase).toBe('recording'));
+    expect(voice.target).toEqual({ kind: 'composer', agentId: 'a1' });
+    expect(handleShortcut(key('M', { shiftKey: true }))).toBe(true);
+    await vi.waitFor(() => expect(backend.called('voice_stop')).toHaveLength(1));
+  });
+
+  it('dictates into the terminal of an agent in the Claude Code view', async () => {
+    voice.reset();
+    fakeBackend({ voice_models: () => [{ id: 'small-q5_1', bytes: 1, installed: true }] });
+    app.agents.a1 = { ...app.agents.a1, terminal: true };
+    app.selectAgent('a1');
+    handleShortcut(key('M', { shiftKey: true }));
+    await vi.waitFor(() => expect(voice.target).toEqual({ kind: 'terminal', agentId: 'a1' }));
+  });
+
+  it('Ctrl+Shift+M does nothing with no agent on screen', () => {
+    voice.reset();
+    const backend = fakeBackend();
+    app.ui = { ...app.ui, view: 'overview' };
+    expect(handleShortcut(key('M', { shiftKey: true }))).toBe(false);
+    expect(backend.called('voice_models')).toHaveLength(0);
   });
 
   it('creates an agent with Ctrl+N', () => {
@@ -283,6 +312,12 @@ describe('holdPrint', () => {
 });
 
 describe('isAppShortcut', () => {
+  it('hands Ctrl+Shift+M (Cmd+Shift+M) over to the app, not plain Ctrl+M', () => {
+    expect(isAppShortcut(key('M', { shiftKey: true }), false)).toBe(true);
+    expect(isAppShortcut(new KeyboardEvent('keydown', { key: 'M', metaKey: true, shiftKey: true }), true)).toBe(true);
+    expect(isAppShortcut(key('m'), false)).toBe(false);
+  });
+
   it('lets navigation shortcuts through the terminal but leaves shell keys to the shell', () => {
     expect(isAppShortcut(key('3'))).toBe(true);
     expect(isAppShortcut(key('"', { code: 'Digit3' }))).toBe(true);

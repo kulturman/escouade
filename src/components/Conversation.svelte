@@ -29,6 +29,7 @@
   import ToolRow from './conv/ToolRow.svelte';
   import TurnCard from './conv/TurnCard.svelte';
   import UserMessage from './conv/UserMessage.svelte';
+  import MicButton from './MicButton.svelte';
   import StatusDot from './StatusDot.svelte';
   import { tip } from '../lib/tip';
 
@@ -505,6 +506,9 @@
       >
         <span class="glyph">▷</span><span class="lbl">{t('conv.header.prepare')}</span>
       </button>
+    {/if}
+    {#if agent.terminal}
+      <MicButton target={{ kind: 'terminal', agentId: agent.id }} />
     {/if}
     <!-- « Vue Claude Code »: never for a ticket's agent, which its board drives over the stream. -->
     {#if canSwitchView(agent)}

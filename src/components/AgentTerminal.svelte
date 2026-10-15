@@ -29,8 +29,10 @@
   import { untrack } from 'svelte';
   import { t } from '../lib/i18n';
   import { mountTerminal } from '../lib/terminals';
+  import { keyLabel } from '../lib/platform';
   import { app } from '../lib/state.svelte';
   import type { Agent } from '../lib/types';
+  import { voice } from '../lib/voice.svelte';
 
   // « Vue Claude Code »: the agent's conversation in Claude Code's own interface. Escouade still follows it (status,
   // notifications, cost, plan) through its hooks and its transcript.
@@ -115,6 +117,12 @@
       <button class="btn" onclick={restart}>{t('conv.terminal.restart')}</button>
     </div>
   {/if}
+  {#if voice.isFor({ kind: 'terminal', agentId: agent.id })}
+    <div class="voice" role="status">
+      <span class="dot" aria-hidden="true"></span>
+      {voice.phase === 'transcribing' ? t('voice.overlay.transcribing') : t('voice.overlay.listening', { key: keyLabel('Ctrl+Shift+M') })}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -148,5 +156,25 @@
   }
   .note.err {
     color: var(--del);
+  }
+  .voice {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--elev2);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    pointer-events: none;
+  }
+  .voice .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--del);
   }
 </style>
