@@ -53,6 +53,7 @@ mod tui;
 mod tui_tests;
 mod updates;
 mod usage;
+mod voice;
 mod which;
 mod worktrees;
 mod wsl;
