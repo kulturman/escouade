@@ -84,7 +84,7 @@ Catalogue figé (URL `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/
 | `large-v3-turbo-q5_0` | `ggml-large-v3-turbo-q5_0.bin` | 574 041 195 | `394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2` |
 
 - Fichiers dans `<dossier de données>/voice/` (`DataDir::voice_dir()`), donc sous `ESCOUADE_DATA_DIR` en développement et en test. L'adresse de base se remplace par `ESCOUADE_VOICE_MODELS_URL` (tests).
-- Téléchargement par `usage::http_client(settings)` (le proxy des réglages), en flux (`reqwest`, feature `stream`) vers `<fichier>.part`, SHA-256 calculé au fil de l'eau (`sha2`, déjà là). Somme ou taille fausse : `.part` supprimé, erreur. Juste : renommé en `<fichier>`. Progression (octets reçus, total) sur un `Channel` au plus 10 fois par seconde. Annulable ; l'annulation supprime le `.part`. Un seul téléchargement à la fois par modèle.
+- Téléchargement par `usage::download_client(settings)` : le proxy des réglages comme `http_client`, mais sans sa limite de 15 s sur toute la requête (seulement 15 s pour se connecter et 30 s de silence du serveur) ; le corps est lu morceau par morceau (`Response::chunk()`, sans la feature `stream`) vers `<fichier>.part`, SHA-256 calculé au fil de l'eau (`sha2`, déjà là). Somme ou taille fausse : `.part` supprimé, erreur. Juste : renommé en `<fichier>`. Progression (octets reçus, total) sur un `Channel` au plus 10 fois par seconde. Annulable ; l'annulation supprime le `.part`. Un seul téléchargement à la fois par modèle.
 - Un modèle installé = son fichier final présent avec la bonne taille (la somme n'est recalculée qu'au téléchargement).
 
 ### `audio.rs` — traitement du signal (fonctions pures)
@@ -97,14 +97,14 @@ Catalogue figé (URL `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/
 ### `capture.rs` — micro
 
 - `cpal::default_host().default_input_device()`, `default_input_config()`, flux construit pour son format (`F32`, `I16`, `I32`… convertis en `f32` par `FromSample`), puis `play()` (cpal 0.18 rend les flux en pause).
-- Le flux cpal ne change pas de fil : il vit dans un fil dédié qui le crée, reçoit les ordres (arrêter, annuler) par un canal et rend les échantillons à la fin. Le rappel audio n'alloue pas : il pousse dans un tampon borné (5 min) et met à jour le niveau courant.
+- Le flux cpal ne change pas de fil : il vit dans un fil dédié qui le crée, reçoit les ordres (arrêter, annuler) par un canal et rend les échantillons à la fin. Le rappel audio ne fait que copier ses échantillons vers ce fil, qui les réduit en mono, mesure le niveau et s'arrête à 5 minutes.
 - Le niveau part vers la fenêtre sur un `Channel<f32>` environ 20 fois par seconde.
 - Une seule capture à la fois (état global dans `Core`).
 
 ### `transcribe.rs` — Whisper
 
 - `WhisperContext` chargé à la première transcription et gardé ; libéré après 5 minutes sans dictée (minuteur Tokio) ou quand le modèle choisi change. Environ 300 Mo de mémoire pour `small-q5_1` pendant qu'il est chargé.
-- Transcription dans `spawn_blocking`. Paramètres : `Greedy { best_of: 1 }`, langue du réglage (`None` pour la détection automatique), `n_threads` = cœurs physiques bornés à 8, impressions coupées, `suppress_blank`, `no_speech_thold` à 0,6.
+- Transcription dans `spawn_blocking`. Paramètres : `Greedy { best_of: 1 }`, langue du réglage (`None` pour la détection automatique), `n_threads` = cœurs logiques (`available_parallelism`) bornés à 8, impressions coupées, `suppress_blank`, `no_speech_thold` à 0,6.
 - Garde-fous contre les phrases que Whisper invente sur un silence (« Sous-titres réalisés par la communauté d'Amara.org », « Merci d'avoir regardé ») : un enregistrement `is_silent` n'est pas transcrit et rend un texte vide ; le texte rendu est `clean_text` : segments mis bout à bout, espaces normalisées, rognés, marques entre crochets ou parenthèses seules (`[Musique]`, `(silence)`) retirées.
 
 ### Commandes Tauri (`commands.rs`, `lib.rs`)
@@ -118,6 +118,7 @@ Catalogue figé (URL `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/
 | `voice_start(on_level: Channel)` | ouvre le micro ; erreur si aucun micro |
 | `voice_stop()` | arrête, transcrit, rend le texte nettoyé (vide si silence) |
 | `voice_cancel()` | arrête sans transcrire |
+| `voice_open_privacy()` | macOS : ouvre Réglages Système › Confidentialité › Micro (le plugin opener n'autorise que http, https, mailto et tel) ; ailleurs, rien |
 
 ### Réglages (`model.rs` `Settings`, `types.ts`)
 
@@ -139,7 +140,7 @@ Catalogue figé (URL `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/
 - Windows : rien à ajouter a priori (cmake, MSVC et LLVM sont sur `windows-latest`) ; la CI le confirme.
 - macOS universel : whisper.cpp compile pour `aarch64` et `x86_64-apple-darwin` (essayé le 2026-10-15 : 42 s et 31 s en release). Le binaire grossit d'environ 1,5 Mo.
 - Pas de feature Cargo : `tauri dev` compile avec `--no-default-features`, une feature par défaut y serait absente ; la dictée est toujours compilée.
-- Dépendances : `whisper-rs = "0.16"` (licence Unlicense), `cpal = "0.18"` (Apache-2.0), feature `stream` de `reqwest`. Compatibles avec la GPL-3.0-or-later d'Escouade. Les modèles Whisper sont sous licence MIT (OpenAI).
+- Dépendances : `whisper-rs = "0.16"` avec la feature `log_backend` (ses messages vont dans `app.log` ; licence Unlicense), `cpal = "0.18"` (Apache-2.0). Compatibles avec la GPL-3.0-or-later d'Escouade. Les modèles Whisper sont sous licence MIT (OpenAI).
 
 ## Vie privée
 
