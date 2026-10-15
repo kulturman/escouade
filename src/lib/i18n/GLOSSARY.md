@@ -445,3 +445,14 @@ Ce qu’Escouade dit à Claude ou lui fait écrire suit « Langue des textes ré
 | En attente de ta réponse | Waiting for your answer | une tâche bloquée : l’agent a posé une question ou demande une autorisation |
 | après 03, 05 | after 03, 05 | les rangs des tâches qu’une tâche à faire attend |
 | étapes (d’une tâche) | steps | « 2/3 étapes » → “2/3 steps” : les cases cochées du plan |
+
+## V — voice
+
+| Français | Anglais | Note |
+|---|---|---|
+| dictée, dicter | dictation, dictate | « Dicter (Ctrl+Maj+M) » → “Dictate (Ctrl+Shift+M)” ; le groupe « Dictée » des réglages → “Dictation” |
+| Dictée vocale | Voice dictation | le titre de la fenêtre du premier usage |
+| modèle (de reconnaissance de la parole) | (speech) model | Tiny, Base, Small, Large turbo : noms propres, jamais traduits |
+| langue parlée | spoken language | le réglage de la dictée ; « Langue de l’interface » → “Interface language” |
+| transcription, transcrire | transcription, transcribe | « Arrêter et transcrire » → “Stop and transcribe” |
+| Rien entendu | Nothing heard | toast d’une dictée silencieuse |

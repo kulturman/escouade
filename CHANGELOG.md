@@ -6,6 +6,7 @@ Les changements visibles d'Escouade, version par version. Les notes de chaque re
 
 ### Ajouts
 
+- Dictée vocale des prompts (issue #8) : le micro du champ de saisie, ou `Ctrl+Maj+M` (`⌘⇧M` sous macOS), écoute ; un second clic transcrit, et le texte s'insère au curseur sans partir seul (`Échap` annule). La transcription se fait sur ta machine, par Whisper : à la première dictée, tu choisis le modèle (de 78 Mo à 574 Mo ; « Small », 190 Mo, recommandé), téléchargé une fois. Marche aussi en vue Claude Code (micro de l'en-tête, texte collé dans le terminal). Modèle et langue parlée dans Réglages › Application › Dictée.
 - Le clic droit sur la carte d'un agent, dans la barre latérale, change aussi sa vue : « Vue Claude Code » quand il est dans la vue d'Escouade, « Vue Escouade » quand il est dans celle de Claude Code, comme le bouton de l'en-tête de sa conversation. L'entrée n'existe pas pour un agent de ticket ni pour un agent archivé.
 - Dans l'éditeur, le clic droit sur un fichier ou un dossier de l'arborescence propose « Afficher dans l'Explorateur » (« Afficher dans le Finder » sous macOS, « Ouvrir le dossier contenant » sous Linux) : le gestionnaire de fichiers du système s'ouvre avec l'élément sélectionné. Sur l'espace libre, l'entrée ouvre le dossier de la source affichée, celui du projet ou le worktree de l'agent (« Ouvrir le dossier » sous Linux). Un projet dans WSL s'ouvre dans l'Explorateur à son chemin `\\wsl.localhost\…` ; si le worktree de l'agent n'existe plus, un message le dit.
 

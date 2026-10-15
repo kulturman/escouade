@@ -39,6 +39,8 @@ Escouade’s message field isn’t shown: you write in the terminal, as in Claud
 
 A message sent to the agent from elsewhere, for example through the [MCP server](mcp), is typed into its interface. It’s refused while the agent is waiting for an answer in its terminal (“The agent is waiting for an answer in its terminal: answer there first.”). An interruption requested from Escouade becomes the `Esc` key in the interface.
 
+To dictate, click the microphone in the agent’s header or press `Ctrl+Shift+M` (`⌘⇧M` on macOS), even when the terminal has the keyboard. A small indicator over the terminal shows that it’s listening; a second click, or the same shortcut, stops and transcribes. The text is pasted into Claude Code’s prompt, without being submitted. See [Dictating a message](chat#dictating-a-message).
+
 ## Opening new agents in this view
 
 In Settings › Claude Code, group “New agents”, the “Open new agents in Claude Code’s interface” switch (off by default) makes each new agent start in this view. Each agent can then switch views from its header. Ticket agents always stay in Escouade’s view. See [the Claude Code settings](settings-claude-code).

@@ -18,6 +18,7 @@ Escouade range ses données dans `~/.escouade/` (`C:\Users\<toi>\.escouade` sous
 | `mcp/<agent>.json` | La configuration MCP d’un agent d’Escouade, avec son jeton. Effacée quand son processus s’arrête, et à chaque démarrage et arrêt de l’app. |
 | `tui/<agent>.json` | Les réglages de hooks que la vue Claude Code d’un agent passe à Claude Code. Le jeton n’y est pas : il passe par une variable d’environnement. |
 | `logs/<agent>-setup.log` | La sortie complète de la dernière préparation du worktree d’un agent. Effacé avec l’agent. |
+| `voice/` | Les modèles de reconnaissance de la parole de la dictée, téléchargés à la demande (de 78 Mo à 574 Mo chacun). Réglages › Application › Dictée les supprime. |
 | `update.json` | La mise à jour en cours d’installation, notée pour le démarrage suivant puis effacée. |
 | `stats.db` | Les statistiques (une base SQLite, avec ses fichiers `stats.db-wal` et `stats.db-shm` tant qu’Escouade tourne). |
 | `telemetry-id` | L’identifiant tiré au hasard de cette installation, pour les statistiques d’usage. Créé quand tu les acceptes, supprimé quand tu les refuses ou les désactives. |

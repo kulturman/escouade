@@ -60,6 +60,8 @@ Shortcuts are written the way the app writes them in English: `Ctrl+Shift+A`, `C
 | `Enter` | Send the message. While Claude is working, it takes the message into account at its next step. | Message field |
 | `Shift+Enter` | New line. | Message field |
 | `Esc` | Interrupt Claude. | Message field, while the agent is working |
+| `Ctrl+Shift+M` | Dictate: listen for the agent on screen (its message field, or its terminal in the Claude Code view), or stop and transcribe. | Everywhere, terminals included |
+| `Esc` | Cancel the dictation, without inserting anything. | Message field, while dictating |
 | `↑` | Recall the last message sent, to send it again as is or edited (the original stays in the conversation). | Empty message field |
 | `↑` / `↓`, `Enter` or `Tab`, `Esc` | Choose, accept, or close an `@file` or `/command` suggestion. | Message field, list open |
 

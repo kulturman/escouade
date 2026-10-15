@@ -39,6 +39,8 @@ Le champ de saisie d’Escouade n’est pas affiché : tu écris dans le termina
 
 Un message envoyé à l’agent d’ailleurs, par exemple par le [serveur MCP](mcp), est tapé dans son interface. Il est refusé tant que l’agent attend une réponse dans son terminal (« L’agent attend une réponse dans son terminal : réponds-y d’abord. »). Une interruption demandée depuis Escouade devient la touche `Échap` dans l’interface.
 
+Pour dicter, clique le micro de l’en-tête de l’agent ou presse `Ctrl+Maj+M` (`⌘⇧M` sous macOS), même quand le terminal a le clavier. Un petit indicateur sur le terminal montre que l’écoute est en cours ; un second clic, ou le même raccourci, arrête et transcrit. Le texte est collé dans l’invite de Claude Code, sans être validé. Voir [Dicter un message](chat#dicter-un-message).
+
 ## Ouvrir les nouveaux agents dans cette vue
 
 Dans Réglages › Claude Code, groupe « Nouveaux agents », l’interrupteur « Ouvrir les nouveaux agents dans l’interface de Claude Code » (désactivé par défaut) fait démarrer chaque nouvel agent dans cette vue. Chaque agent peut ensuite changer de vue depuis son en-tête. Les agents de ticket restent toujours dans la vue d’Escouade. Voir [les réglages de Claude Code](settings-claude-code).

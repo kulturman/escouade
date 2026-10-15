@@ -60,6 +60,8 @@ Les raccourcis s’écrivent comme l’app les écrit en français : `Ctrl+Maj+A
 | `Entrée` | Envoyer le message. Pendant que Claude travaille, il en tient compte dès sa prochaine étape. | Champ de message |
 | `Maj+Entrée` | Aller à la ligne. | Champ de message |
 | `Échap` | Interrompre Claude. | Champ de message, pendant que l’agent travaille |
+| `Ctrl+Maj+M` | Dicter : écouter pour l’agent affiché (son champ de message, ou son terminal dans la vue Claude Code), ou arrêter et transcrire. | Partout, terminaux compris |
+| `Échap` | Annuler la dictée, sans rien insérer. | Champ de message, pendant la dictée |
 | `↑` | Rappeler le dernier message envoyé, pour le renvoyer tel quel ou modifié (l’original reste dans la conversation). | Champ de message vide |
 | `↑` / `↓`, `Entrée` ou `Tab`, `Échap` | Choisir, prendre ou fermer une suggestion `@fichier` ou `/commande`. | Champ de message, liste ouverte |
 
