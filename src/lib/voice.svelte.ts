@@ -6,7 +6,6 @@ import { t } from './i18n';
 import { api } from './ipc';
 import { IS_MAC } from './platform';
 import { app } from './state.svelte';
-import { getXTerm } from './terminals';
 import type { VoiceEvent, VoiceProgress } from './types';
 import { appendDictation } from './voice-text';
 
@@ -88,7 +87,7 @@ class Voice {
     this.phase = 'transcribing';
     this.level = 0;
     try {
-      this.#deliver(target, await api.voiceStop());
+      await this.#deliver(target, await api.voiceStop());
     } catch (e) {
       app.toast(String(e), 'error');
     } finally {
@@ -150,13 +149,15 @@ class Voice {
     void this.stop();
   }
 
-  #deliver(target: VoiceTarget, text: string) {
+  async #deliver(target: VoiceTarget, text: string) {
     if (!text.trim()) {
       app.toast(t('voice.nothingHeard'));
       return;
     }
     if (target.kind === 'terminal') {
       const id = app.agents[target.agentId]?.terminalId;
+      // Loaded on demand: xterm.js has no business in the composer's way.
+      const { getXTerm } = await import('./terminals');
       const xterm = id ? getXTerm(id) : undefined;
       if (xterm) {
         xterm.term.paste(text);
