@@ -5,6 +5,7 @@
   import Chips from './Chips.svelte';
   import Group from './Group.svelte';
   import Row from './Row.svelte';
+  import VoiceSettings from './VoiceSettings.svelte';
 
   // The « Application » tab: the language of the interface and that of the texts Claude writes, saved with the other
   // settings and applied at once (the backend tells the window, the menus and its own texts).
@@ -27,3 +28,5 @@
     <Chips label={t('settings.app.claudeLanguage')} options={claudeOptions} bind:value={s.claudeLanguage} />
   </Row>
 </Group>
+
+<VoiceSettings />
