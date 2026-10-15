@@ -697,6 +697,8 @@ pub struct Core<R: Runtime = Wry> {
     pub bases: RwLock<integrations::Bases>,
     /// The GitHub CLI's token, once asked for.
     pub(crate) gh_token: Mutex<Option<String>>,
+    /// The dictation: the microphone listened to, Whisper loaded, the models downloading.
+    pub voice: crate::voice::Voice,
     /// What the sync of imported tickets is asked to do (a change to tell, failed operations to
     /// try again), one at a time and in order, by a single worker (made at the first one).
     pub(crate) sync_queue: Mutex<Option<integrations::sync::SyncSender>>,
@@ -1494,6 +1496,7 @@ impl<R: Runtime> Core<R> {
             secrets,
             bases: RwLock::new(integrations::Bases::from_env()),
             gh_token: Mutex::default(),
+            voice: Default::default(),
             sync_queue: Mutex::default(),
             pending_syncs: Mutex::new(integrations::sync::SyncQueue::new(pending_syncs)),
             import_lock: tokio::sync::Mutex::new(()),

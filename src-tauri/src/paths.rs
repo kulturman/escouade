@@ -333,7 +333,6 @@ impl DataDir {
     }
 
     /// The dictation's speech models (`voice::models`), downloaded on demand.
-    #[allow(dead_code)] // Provisional: the dictation's commands call it (plan, task 4).
     pub fn voice_dir(&self) -> PathBuf {
         self.0.join("voice")
     }

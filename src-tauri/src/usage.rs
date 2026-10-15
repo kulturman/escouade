@@ -55,7 +55,6 @@ pub fn http_client(settings: &Settings) -> Result<reqwest::Client> {
 
 /// Large downloads (the dictation's models): no limit on the whole, only on connecting and on
 /// a silence of the server.
-#[allow(dead_code)] // Provisional: the dictation's commands call it (plan, task 4).
 pub fn download_client(settings: &Settings) -> Result<reqwest::Client> {
     Ok(client_builder(settings)?
         .connect_timeout(Duration::from_secs(15))

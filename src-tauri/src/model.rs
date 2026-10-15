@@ -74,6 +74,11 @@ pub struct Settings {
     /// « Statistiques d’usage » (`telemetry`): None until the user answered the question
     /// of the first start (settings saved before it have none: they are asked too).
     pub telemetry: Option<bool>,
+    /// « Dictée › Modèle »: the speech model of the dictation (`voice::models`), downloaded on
+    /// first use.
+    pub voice_model: String,
+    /// « Dictée › Langue parlée »: `ui` (the interface's), `auto` (detected) or a language code.
+    pub voice_language: String,
 }
 
 /// A Claude account: Claude Code with a configuration folder of its own (`accounts`).
@@ -263,6 +268,8 @@ impl Default for Settings {
             todo_tools: true,
             switch_on_limit: false,
             telemetry: None,
+            voice_model: crate::voice::models::DEFAULT_MODEL.into(),
+            voice_language: "ui".into(),
         }
     }
 }
@@ -1482,6 +1489,31 @@ mod tests {
         }
         let v = serde_json::to_value(Settings::default()).unwrap();
         assert_eq!(v["telemetry"], Value::Null);
+    }
+
+    #[test]
+    fn the_dictation_uses_the_small_model_in_the_interface_s_language_unless_told_otherwise() {
+        // Settings saved before the dictation have neither field.
+        let s: Settings = serde_json::from_value(json!({ "sound": false })).unwrap();
+        assert_eq!(
+            (s.voice_model.as_str(), s.voice_language.as_str()),
+            ("small-q5_1", "ui")
+        );
+        let d = Settings::default();
+        assert_eq!(
+            (d.voice_model.as_str(), d.voice_language.as_str()),
+            ("small-q5_1", "ui")
+        );
+        let v = serde_json::to_value(Settings {
+            voice_model: "base".into(),
+            voice_language: "auto".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            (&v["voiceModel"], &v["voiceLanguage"]),
+            (&json!("base"), &json!("auto"))
+        );
     }
 
     #[test]
