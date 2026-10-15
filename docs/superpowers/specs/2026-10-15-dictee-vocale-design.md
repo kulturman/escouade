@@ -40,15 +40,21 @@ Hors sujet : le mode conversation vocale (ESC-97 : synthèse Piper, envoi après
 Sans modèle installé, le premier clic ouvre une fenêtre :
 
 > **Dictée vocale**
-> La transcription se fait sur ta machine : ni le son ni le texte ne partent en ligne. Elle a besoin d'un modèle de reconnaissance de la parole, à télécharger une fois.
-> Modèle : Whisper small (190 Mo) — [changer dans les réglages]
+> La transcription se fait sur ta machine : ni le son ni le texte ne partent en ligne. Elle a besoin d'un modèle de reconnaissance de la parole, à télécharger une fois. Choisis-le :
+> ○ Tiny · 78 Mo — le plus rapide, se trompe souvent
+> ○ Base · 148 Mo — rapide, approximatif
+> ● Small · 190 Mo — **recommandé** : juste et rapide
+> ○ Large turbo · 574 Mo — le plus juste, pour une machine puissante
+> Tu pourras en changer dans Réglages › Application › Dictée.
 > [Télécharger et dicter]  [Annuler]
 
-Pendant le téléchargement : barre de progression (Mo reçus / total), « Annuler ». À la fin, l'écoute démarre seule. Une erreur (réseau, somme de contrôle) s'affiche dans la fenêtre avec « Réessayer ».
+- La liste est celle du catalogue, dans l'ordre de taille ; le modèle du réglage `voiceModel` est présélectionné (`small-q5_1` par défaut), et « recommandé » marque toujours `small-q5_1`. Un modèle déjà installé dit « Installé » et ne se retélécharge pas : le choisir enregistre le réglage et démarre l'écoute.
+- « Télécharger et dicter » enregistre le choix dans `voiceModel`, puis télécharge. Pendant le téléchargement : la liste est grisée, barre de progression (Mo reçus / total), « Annuler » (qui garde le choix). À la fin, la fenêtre se ferme et l'écoute démarre seule. Une erreur (réseau, somme de contrôle) s'affiche dans la fenêtre avec « Réessayer » ; on peut alors choisir un autre modèle.
+- La fenêtre s'ouvre chaque fois que le modèle choisi n'est pas installé (premier usage, ou modèle supprimé, ou réglage changé vers un modèle absent).
 
 ### Réglages › Application › groupe « Dictée »
 
-- **Modèle** : une ligne par modèle du catalogue avec son nom, sa taille, une phrase (« le plus rapide, approximatif » … « le plus juste, lent ») et son état : « Télécharger », la progression, « Installé · Supprimer ». Un bouton radio par ligne choisit le modèle utilisé, installé ou non : s'il ne l'est pas, la prochaine dictée ouvre la fenêtre de premier usage pour lui. Supprimer le modèle choisi ne change pas le choix.
+- **Modèle** : une ligne par modèle du catalogue avec son nom, sa taille, la même phrase que dans la fenêtre du premier usage (« le plus rapide, se trompe souvent » … « le plus juste, pour une machine puissante ») et son état : « Télécharger », la progression, « Installé · Supprimer ». Un bouton radio par ligne choisit le modèle utilisé, installé ou non : s'il ne l'est pas, la prochaine dictée ouvre la fenêtre de premier usage pour lui. Supprimer le modèle choisi ne change pas le choix.
 - **Langue parlée** : « Langue de l'interface » (défaut), « Détection automatique », puis une liste fermée (français, anglais, espagnol, allemand, italien, portugais, néerlandais). La détection automatique se trompe plus souvent sur un prompt court : la note du réglage le dit.
 
 ### Erreurs
@@ -149,10 +155,11 @@ Le son reste en mémoire le temps de la transcription, n'est jamais écrit sur l
   - La capture (cpal) et la transcription (Whisper) ne sont pas testées en CI : pas de micro sur les runners, modèle trop lourd.
 - Front (Vitest, `fakeBackend`) :
   - `voice.svelte.ts` : enchaînement des états, modèle absent → fenêtre de premier usage, erreurs, annulation, une seule dictée à la fois ;
+  - fenêtre de premier usage : les 4 modèles, le réglage présélectionné, « recommandé » sur `small-q5_1`, le choix enregistré dans `voiceModel` avant le téléchargement, un modèle déjà installé qui démarre l'écoute sans téléchargement, la liste grisée pendant le téléchargement, « Réessayer » après une erreur ;
   - `Composer` : bouton, jauge, insertion au curseur et à la place de la sélection, espace ajoutée, `Échap` qui annule la dictée, changement d'agent → brouillon de l'agent de départ ;
   - vue Claude Code : `paste` sur le terminal de l'agent ;
   - `shortcuts.test.ts` : `Ctrl+Shift+M` (et `⌘⇧M`), présent dans `isAppShortcut` ;
-  - groupe « Dictée » des réglages, fenêtre de premier usage, textes en anglais.
+  - groupe « Dictée » des réglages, textes en anglais.
 - À la main, sous macOS avec un vrai micro : dictée en français et en anglais, premier usage avec téléchargement, micro refusé, changement d'agent pendant la transcription, vue Claude Code. La PR dit ce qui n'a pas été essayé sous Windows et Linux.
 
 ## Documentation
