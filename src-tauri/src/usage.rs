@@ -36,17 +36,31 @@ pub fn parse_windows(v: &Value) -> Windows {
 
 /// The app's own requests (quotas, ticket systems): through the proxy, trusting the certificates
 /// the system trusts as well as the usual ones, or none checked when TLS verification is off.
-pub fn http_client(settings: &Settings) -> Result<reqwest::Client> {
-    let mut b = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .danger_accept_invalid_certs(settings.insecure_tls);
+fn client_builder(settings: &Settings) -> Result<reqwest::ClientBuilder> {
+    let mut b = reqwest::Client::builder().danger_accept_invalid_certs(settings.insecure_tls);
     let url = settings.proxy_url.trim();
     if !url.is_empty() {
         let proxy =
             reqwest::Proxy::all(url)?.no_proxy(reqwest::NoProxy::from_string(&settings.no_proxy));
         b = b.proxy(proxy);
     }
-    Ok(b.build()?)
+    Ok(b)
+}
+
+pub fn http_client(settings: &Settings) -> Result<reqwest::Client> {
+    Ok(client_builder(settings)?
+        .timeout(Duration::from_secs(15))
+        .build()?)
+}
+
+/// Large downloads (the dictation's models): no limit on the whole, only on connecting and on
+/// a silence of the server.
+#[allow(dead_code)] // Provisional: the dictation's commands call it (plan, task 4).
+pub fn download_client(settings: &Settings) -> Result<reqwest::Client> {
+    Ok(client_builder(settings)?
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30))
+        .build()?)
 }
 
 /// The endpoint `/usage` relies on.
@@ -526,6 +540,15 @@ mod tests {
     use crate::paths::test_dir;
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn the_download_client_takes_the_proxy_of_the_settings() {
+        let mut s = Settings::default();
+        assert!(download_client(&s).is_ok());
+        s.proxy_url = "not a url".into();
+        assert!(download_client(&s).is_err());
+        assert!(http_client(&s).is_err());
+    }
 
     #[test]
     fn the_cost_of_the_day_is_set_for_each_account_and_in_total() {

@@ -332,6 +332,12 @@ impl DataDir {
         self.0.join("conversations")
     }
 
+    /// The dictation's speech models (`voice::models`), downloaded on demand.
+    #[allow(dead_code)] // Provisional: the dictation's commands call it (plan, task 4).
+    pub fn voice_dir(&self) -> PathBuf {
+        self.0.join("voice")
+    }
+
     /// The configuration folders of the Claude accounts made in the settings (all but Principal's),
     /// one per account: each its `CLAUDE_CONFIG_DIR`.
     pub fn claude_accounts(&self) -> PathBuf {
