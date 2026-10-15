@@ -114,7 +114,7 @@ Sous macOS, `Ctrl` devient `⌘` (sauf `Ctrl+Tab`, `⌘Tab` changeant d'applicat
 
 ## Développement
 
-Prérequis : Node.js 20.18+ et rustup (MSVC sous Windows ; sous macOS, les outils en ligne de commande Xcode). La version de Rust est épinglée dans `src-tauri/rust-toolchain.toml` (la même qu'en CI) et rustup l'installe automatiquement.
+Prérequis : Node.js 20.18+ et rustup (MSVC sous Windows ; sous macOS, les outils en ligne de commande Xcode). La version de Rust est épinglée dans `src-tauri/rust-toolchain.toml` (la même qu'en CI) et rustup l'installe automatiquement. La dictée compile whisper.cpp : il faut aussi cmake, et sous Linux les en-têtes d'ALSA (`libasound2-dev`).
 
 ```powershell
 npm ci

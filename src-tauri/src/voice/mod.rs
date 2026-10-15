@@ -3,5 +3,6 @@
 #![allow(dead_code)]
 
 pub mod audio;
+pub mod capture;
 pub mod models;
 pub mod text;
