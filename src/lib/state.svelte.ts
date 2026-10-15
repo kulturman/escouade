@@ -15,6 +15,7 @@ import { mcp } from './mcp.svelte';
 import { readPref, writePref } from './prefs';
 import { testCommand } from './recipe';
 import type { SettingsTab } from './settings.svelte';
+import type { VoiceTarget } from './voice.svelte';
 import { applyTheme } from './theme';
 import type {
   AccountView,
@@ -41,6 +42,8 @@ import type {
 
 export type Modal =
   | { kind: 'newProject' }
+  /** The dictation's first use, or its model missing: choose and download it, then listen for `target`. */
+  | { kind: 'voiceSetup'; target: VoiceTarget }
   /** The question of the first start: the usage statistics. */
   | { kind: 'telemetry' }
   /**

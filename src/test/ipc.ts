@@ -69,6 +69,8 @@ export const SETTINGS: Settings = {
   mcpPort: 0,
   todoTools: true,
   terminalView: false,
+  voiceModel: 'small-q5_1',
+  voiceLanguage: 'ui',
 };
 
 export function project(over: Partial<Project> = {}): Project {

@@ -19,6 +19,7 @@ import runs from './runs';
 import settings from './settings';
 import shell from './shell';
 import stats from './stats';
+import voice from './voice';
 
 export const fr = {
   common,
@@ -40,6 +41,7 @@ export const fr = {
   mcp,
   branches,
   plan,
+  voice,
 } as const;
 
 export type Catalog = typeof fr;
