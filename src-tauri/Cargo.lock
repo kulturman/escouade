@@ -1150,6 +1150,7 @@ version = "1.7.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "block2",
  "chrono",
  "cpal",
  "dirs 6.0.0",
@@ -1162,6 +1163,8 @@ dependencies = [
  "libc",
  "log",
  "notify",
+ "objc2",
+ "objc2-foundation",
  "os_info",
  "parking_lot",
  "portable-pty",

@@ -1591,9 +1591,15 @@ fn voice_model(id: &str) -> Res<&'static voice::models::Model> {
     voice::models::find(id).ok_or_else(|| tr!("modèle inconnu : {id}", "unknown model: {id}"))
 }
 
+/// The models, with those installed. The parts a download cut short left (the app quit) are
+/// removed on the way, but those of the downloads under way.
 #[tauri::command]
 pub fn voice_models(core: CoreState) -> Vec<ModelState> {
-    voice::models::states(&core.data.voice_dir())
+    let dir = core.data.voice_dir();
+    let downloading: Vec<String> = core.voice.downloads.lock().keys().cloned().collect();
+    let downloading: Vec<&str> = downloading.iter().map(String::as_str).collect();
+    voice::models::remove_stale_parts(&dir, &downloading);
+    voice::models::states(&dir)
 }
 
 /// Downloads a model; refused while the same one downloads already.
@@ -1642,19 +1648,30 @@ pub fn voice_cancel_download(core: CoreState, model: String) {
     }
 }
 
+/// Off the window's thread: letting Whisper go waits for a model being loaded.
 #[tauri::command]
-pub fn voice_delete_model(core: CoreState, model: String) -> Res<()> {
+pub async fn voice_delete_model(core: CoreState<'_>, model: String) -> Res<()> {
     let m = voice_model(&model)?;
-    core.voice.whisper.unload();
-    match std::fs::remove_file(voice::models::path(&core.data.voice_dir(), m)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
-        _ => Ok(()),
-    }
+    let whisper = core.voice.whisper.clone();
+    let path = voice::models::path(&core.data.voice_dir(), m);
+    tauri::async_runtime::spawn_blocking(move || {
+        whisper.unload();
+        let part = path.with_file_name(format!("{}.part", m.file));
+        let _ = std::fs::remove_file(part);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-/// Opens the microphone. A dictation a reloaded window left open is stopped first.
-#[tauri::command(async)]
-pub fn voice_start(core: CoreState, on_event: Channel<VoiceEvent>) -> Res<()> {
+/// Opens the microphone (on macOS, after asking the user when the system never did). A dictation
+/// a reloaded window left open is stopped first. Off the async threads: opening the device, and the
+/// system's question, block.
+#[tauri::command]
+pub async fn voice_start(core: CoreState<'_>, on_event: Channel<VoiceEvent>) -> Res<()> {
     let id = core.settings.read().voice_model.clone();
     let m = voice_model(&id)?;
     if !voice::models::is_installed(&core.data.voice_dir(), m) {
@@ -1664,15 +1681,20 @@ pub fn voice_start(core: CoreState, on_event: Channel<VoiceEvent>) -> Res<()> {
         ));
     }
     // One microphone: the one left open is let go of before opening it again.
-    if let Some(old) = core.voice.take_capture() {
-        old.finish();
-    }
-    let capture = voice::capture::Capture::start(move |e| {
-        let _ = on_event.send(e);
+    let old = core.voice.take_capture();
+    let capture = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(old) = old {
+            old.finish();
+        }
+        voice::capture::Capture::start(move |e| {
+            let _ = on_event.send(e);
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
     .map_err(err)?;
     if let Some(old) = core.voice.put_capture(capture) {
-        old.finish();
+        tauri::async_runtime::spawn_blocking(move || old.finish());
     }
     Ok(())
 }
@@ -1711,10 +1733,11 @@ pub async fn voice_stop(core: CoreState<'_>) -> Res<String> {
     Ok(text)
 }
 
-#[tauri::command(async)]
+#[tauri::command]
 pub fn voice_cancel(core: CoreState) {
     if let Some(c) = core.voice.take_capture() {
-        c.finish();
+        // Joining the capture thread blocks: off the window's thread.
+        tauri::async_runtime::spawn_blocking(move || c.finish());
     }
 }
 

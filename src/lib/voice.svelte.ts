@@ -77,7 +77,9 @@ class Voice {
       this.phase = 'recording';
     } catch (e) {
       this.reset();
-      app.toast(String(e), 'error');
+      // The backend refuses with the window's own words when the system denies the microphone.
+      if (String(e) === t('voice.muted')) this.#denied();
+      else app.toast(String(e), 'error');
     }
   }
 
@@ -138,15 +140,20 @@ class Voice {
     if (e.reason === 'muted') {
       this.reset();
       api.voiceCancel().catch(() => {});
-      app.toast(
-        t('voice.muted'),
-        'error',
-        IS_MAC ? { label: t('voice.openPrivacy'), onClick: () => void api.voiceOpenPrivacy().catch(() => {}) } : undefined,
-      );
+      this.#denied();
       return;
     }
     if (e.reason === 'limit') app.toast(t('voice.limit'));
     void this.stop();
+  }
+
+  /** « Escouade n’a pas accès au micro », with the way to the system's privacy settings on macOS. */
+  #denied() {
+    app.toast(
+      t('voice.muted'),
+      'error',
+      IS_MAC ? { label: t('voice.openPrivacy'), onClick: () => void api.voiceOpenPrivacy().catch(() => {}) } : undefined,
+    );
   }
 
   async #deliver(target: VoiceTarget, text: string) {

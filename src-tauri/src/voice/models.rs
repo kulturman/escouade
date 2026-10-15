@@ -93,6 +93,20 @@ pub fn states(dir: &Path) -> Vec<ModelState> {
         .collect()
 }
 
+/// Removes the `.part` files a download cut short left (the app quit, crashed), but those of the
+/// models in `downloading`.
+pub fn remove_stale_parts(dir: &Path, downloading: &[&str]) {
+    for m in MODELS.iter().filter(|m| !downloading.contains(&m.id)) {
+        let part = dir.join(format!("{}.part", m.file));
+        if part.exists() {
+            match std::fs::remove_file(&part) {
+                Ok(()) => log::info!("voice: removed {}", part.display()),
+                Err(e) => log::warn!("voice: {} not removed: {e}", part.display()),
+            }
+        }
+    }
+}
+
 /// Downloads `m` from `base` into `dir`: to `<file>.part`, its checksum computed on the way,
 /// renamed once whole and right. `progress` gets (received, total) at most ten times a second,
 /// and once at the end. `cancel` stops it; a stopped or failed download leaves nothing.
@@ -312,6 +326,27 @@ mod tests {
         assert!(e.to_string().contains("annulé"), "{e}");
         assert!(!dir.join("t.bin").exists());
         assert!(!dir.join("t.bin.part").exists());
+    }
+
+    #[test]
+    fn removes_the_parts_left_by_a_download_cut_short_but_not_one_under_way() {
+        let dir = scratch("parts");
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in [
+            "ggml-tiny.bin.part",
+            "ggml-base.bin.part",
+            "ggml-small-q5_1.bin",
+            "notes.txt",
+        ] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        remove_stale_parts(&dir, &["base"]);
+        assert!(!dir.join("ggml-tiny.bin.part").exists());
+        assert!(dir.join("ggml-base.bin.part").exists());
+        assert!(dir.join("ggml-small-q5_1.bin").exists());
+        assert!(dir.join("notes.txt").exists());
+        // No folder yet: nothing to do.
+        remove_stale_parts(&dir.join("missing"), &[]);
     }
 
     #[test]

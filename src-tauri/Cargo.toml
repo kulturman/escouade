@@ -77,6 +77,10 @@ gtk = "0.18"
 tauri-plugin-notification = "2"
 # The integrations' secrets in the Keychain.
 keyring = { version = "3.6", features = ["apple-native"] }
+# The dictation asks macOS for the microphone (AVCaptureDevice); already built for cpal.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
 
 [profile.release]
 codegen-units = 1

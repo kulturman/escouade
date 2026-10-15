@@ -62,7 +62,7 @@ Sans modèle installé, le premier clic ouvre une fenêtre :
 | Cas | Ce que voit l'utilisateur |
 |---|---|
 | Aucun micro | toast « Aucun micro trouvé » |
-| Micro refusé (macOS : cpal reçoit des zéros purs ; au-delà d'1 s de zéros exacts) | l'écoute s'arrête ; toast « Escouade n'a pas accès au micro » avec, sous macOS, « Ouvrir les réglages » vers Confidentialité › Micro |
+| Micro refusé (macOS : l'accès est demandé au système avant d'écouter, par `AVCaptureDevice` ; sinon, au-delà d'1 s de zéros exacts) | l'écoute s'arrête ; toast « Escouade n'a pas accès au micro » avec, sous macOS, « Ouvrir les réglages » vers Confidentialité › Micro |
 | Micro débranché pendant l'écoute | l'écoute s'arrête, ce qui a été capté est transcrit |
 | Écoute de plus de 5 minutes | arrêt automatique et transcription, toast « Dictée arrêtée au bout de 5 minutes » |
 | Modèle corrompu ou illisible | toast d'erreur ; le fichier est supprimé, le prochain clic repropose le téléchargement |

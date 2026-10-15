@@ -34,6 +34,74 @@ pub enum VoiceEvent {
     Ended { reason: EndReason },
 }
 
+/// What the system says of the app and the microphone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    Granted,
+    Denied,
+    /// Never asked: the system asks the user (macOS).
+    Ask,
+}
+
+/// macOS's `AVAuthorizationStatus`: not determined (0), restricted (1), denied (2), authorized (3).
+pub fn access_of(status: isize) -> Access {
+    match status {
+        3 => Access::Granted,
+        0 => Access::Ask,
+        _ => Access::Denied,
+    }
+}
+
+/// « Escouade n’a pas accès au micro », as the window shows it too (`voice.muted`).
+pub fn denied() -> anyhow::Error {
+    anyhow!(tr!(
+        "Escouade n’a pas accès au micro",
+        "Escouade can’t access the microphone"
+    ))
+}
+
+/// The microphone allowed, asked first when the system never asked: until the user answers, cpal
+/// would hear nothing but zeros (taken for a denied microphone). Blocks while the system asks.
+#[cfg(target_os = "macos")]
+fn ensure_access() -> Result<()> {
+    use block2::RcBlock;
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, Bool};
+    use objc2_foundation::NSString;
+
+    #[link(name = "AVFoundation", kind = "framework")]
+    extern "C" {
+        static AVMediaTypeAudio: &'static NSString;
+    }
+    let device =
+        AnyClass::get(c"AVCaptureDevice").ok_or_else(|| anyhow!("AVCaptureDevice missing"))?;
+    let status: isize =
+        unsafe { msg_send![device, authorizationStatusForMediaType: AVMediaTypeAudio] };
+    match access_of(status) {
+        Access::Granted => Ok(()),
+        Access::Denied => Err(denied()),
+        Access::Ask => {
+            let (tx, rx) = mpsc::channel::<bool>();
+            let answer = RcBlock::new(move |granted: Bool| {
+                let _ = tx.send(granted.as_bool());
+            });
+            let _: () = unsafe {
+                msg_send![device, requestAccessForMediaType: AVMediaTypeAudio, completionHandler: &*answer]
+            };
+            if rx.recv().unwrap_or(false) {
+                Ok(())
+            } else {
+                Err(denied())
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ensure_access() -> Result<()> {
+    Ok(())
+}
+
 /// What the device gave, kept as mono at its own rate. Apart from the device, to be tested.
 pub struct Recorder {
     rate: u32,
@@ -90,6 +158,10 @@ impl Capture {
         std::thread::Builder::new()
             .name("voice-capture".into())
             .spawn(move || {
+                if let Err(e) = ensure_access() {
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
                 let (chunk_tx, chunk_rx) = mpsc::channel::<Vec<f32>>();
                 let (err_tx, err_rx) = mpsc::channel::<()>();
                 let (stream, rate, channels) = match open(chunk_tx, err_tx) {
@@ -210,6 +282,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asks_for_the_microphone_only_when_the_system_never_did() {
+        // AVAuthorizationStatus: not determined, restricted, denied, authorized.
+        assert_eq!(access_of(0), Access::Ask);
+        assert_eq!(access_of(1), Access::Denied);
+        assert_eq!(access_of(2), Access::Denied);
+        assert_eq!(access_of(3), Access::Granted);
+    }
 
     #[test]
     fn says_the_microphone_is_denied_after_a_second_of_exact_zeros() {
