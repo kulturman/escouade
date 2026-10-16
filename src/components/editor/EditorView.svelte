@@ -11,6 +11,7 @@
   import { navHistory, type NavEntry } from '../../lib/editor/history';
   import { detectIndent } from '../../lib/editor/indent';
   import { languageLabel, loadLanguage } from '../../lib/editor/languages';
+  import Markdown from '../conv/Markdown.svelte';
   import { readTreeWidth, TREE_DEFAULT, TREE_MIN, treeMax, writeTreeWidth } from '../../lib/editor/layout';
   import { DEFAULT_ALIASES, fileSet, linkResolvers, parseAliases, type Aliases } from '../../lib/editor/links';
   import { setEditorJump } from '../../lib/editor/quick-open';
@@ -57,6 +58,10 @@
   const activeKey = $derived(activePath ? buffers.key(project.id, source, activePath) : null);
   const buf = $derived(activeKey ? buffers.all[activeKey] : undefined);
   const dirty = $derived(buffers.isDirty(buf));
+  /** A Markdown file shown rendered (« Aperçu ») rather than as text, file by file. */
+  let previews = $state<Record<string, boolean>>({});
+  const isMarkdown = $derived(!!activePath && /\.(md|markdown)$/i.test(activePath));
+  const previewing = $derived(isMarkdown && !!buf && !!previews[buf.key]);
 
   let status = $state<Record<string, FileStatus>>({});
   let cursor = $state({ line: 1, col: 1 });
@@ -914,32 +919,41 @@
         {:else if buf.kind === 'error'}
           <div class="empty">{buf.error}</div>
         {:else}
-          <CodeEditor
-            bind:this={code}
-            docKey={`${buf.id}`}
-            text={buf.text}
-            version={buf.version}
-            {language}
-            {indent}
-            {changes}
-            {compare}
-            {reveal}
-            nav={{ path: activePath, files: tree?.files ?? [], resolvers }}
-            onrevealed={revealed}
-            onchange={(text) => buffers.edit(buf.key, text)}
-            oncursor={(c) => (cursor = c)}
-            ontargets={follow}
-            onnaverror={(e) => alive && app.toast(t('editor.toast.navigateFailed', { error: String(e) }), 'error')}
-            onback={() => travel(true)}
-            onforward={() => travel(false)}
-            onreferences={references}
-          />
+          {#if previewing}
+            <div class="preview"><Markdown text={buf.text} /></div>
+          {:else}
+            <CodeEditor
+              bind:this={code}
+              docKey={`${buf.id}`}
+              text={buf.text}
+              version={buf.version}
+              {language}
+              {indent}
+              {changes}
+              {compare}
+              {reveal}
+              nav={{ path: activePath, files: tree?.files ?? [], resolvers }}
+              onrevealed={revealed}
+              onchange={(text) => buffers.edit(buf.key, text)}
+              oncursor={(c) => (cursor = c)}
+              ontargets={follow}
+              onnaverror={(e) => alive && app.toast(t('editor.toast.navigateFailed', { error: String(e) }), 'error')}
+              onback={() => travel(true)}
+              onforward={() => travel(false)}
+              onreferences={references}
+            />
+          {/if}
           {#if picking}
             <TargetPicker targets={picking.targets} label={picking.label} at={picking.at} onpick={pick} onclose={() => (picking = null)} />
           {/if}
           <div class="status mono">
             <span>{t('editor.status.position', { line: cursor.line, col: cursor.col })}</span>
             <span>{languageLabel(activePath)}</span>
+            {#if isMarkdown}
+              <button class="btn ghost preview-toggle" aria-pressed={previewing} onclick={() => (previews[buf.key] = !previewing)}
+                >{previewing ? t('editor.status.text') : t('editor.status.preview')}</button
+              >
+            {/if}
             <span>UTF-8</span>
             <span>{buf.eol === 'crlf' ? 'CRLF' : 'LF'}</span>
             <span>{indent.tabs ? t('editor.status.tabs') : t('editor.status.spaces', { size: indent.size })}</span>
@@ -1175,6 +1189,17 @@
     justify-content: center;
     color: var(--muted);
     font-size: 13px;
+  }
+  .preview {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 20px 28px;
+  }
+  .preview-toggle {
+    height: 20px;
+    padding: 0 8px;
+    font-size: 11px;
   }
   .status {
     height: 26px;

@@ -63,6 +63,25 @@ describe('EditorView', () => {
     expect(screen.getByText('Enregistré')).toBeInTheDocument();
   });
 
+  it('shows a Markdown file rendered, and back as text, from the status bar', async () => {
+    backend();
+    await app.openEditor({ source: 'project', path: 'README.md' });
+    render(EditorView, { project: project() });
+    await userEvent.click(await screen.findByRole('button', { name: 'Aperçu' }));
+    expect(await screen.findByRole('heading', { name: 'demo' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Texte' }));
+    expect(screen.queryByRole('heading', { name: 'demo' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Aperçu' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('offers no preview for a file that is not Markdown', async () => {
+    backend();
+    await app.openEditor({ source: 'project', path: 'src/app.ts' });
+    render(EditorView, { project: project() });
+    expect(await screen.findByText('TypeScript')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Aperçu' })).toBeNull();
+  });
+
   it('saves what was typed', async () => {
     const be = backend();
     await app.openEditor({ source: 'project', path: 'src/app.ts' });
