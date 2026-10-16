@@ -20,6 +20,11 @@ use std::time::Duration;
 /// The app's key in Escouade's Aptabase (`SH`: a self-hosted instance).
 pub const APP_KEY: &str = "A-SH-9464589961";
 pub const ENDPOINT: &str = "https://aptabase.gagnaire.dev/api/v0/events";
+/// Escouade K (kulturman's fork) has no Aptabase of its own: it never sends, whatever the settings
+/// say (a `settings.json` copied from Escouade may say yes).
+pub const SENDS: bool = false;
+// Escouade K does not build if it sends.
+const _: () = assert!(!SENDS);
 /// What the SDK says it is, in its `sdkVersion` (40 characters at most).
 const SDK: &str = concat!("escouade@", env!("CARGO_PKG_VERSION"));
 /// Aptabase takes 25 events per request at most.

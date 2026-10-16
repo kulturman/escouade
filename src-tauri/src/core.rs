@@ -1585,7 +1585,8 @@ impl<R: Runtime> Core<R> {
             data.telemetry_id_file(),
             app.package_info().version.to_string(),
             settings.telemetry,
-            paths::sandbox_dir().is_none(),
+            // The tests still follow what Escouade counts (the code is Escouade's, merged again).
+            (cfg!(test) || crate::telemetry::SENDS) && paths::sandbox_dir().is_none(),
         ));
         let core = Arc::new_cyclic(|me| Self {
             me: me.clone(),

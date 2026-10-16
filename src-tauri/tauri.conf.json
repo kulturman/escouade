@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Escouade",
+  "productName": "Escouade K",
   "mainBinaryName": "escouade",
   "version": "1.7.9",
-  "identifier": "dev.gagnaire.escouade",
+  "identifier": "dev.kulturman.escouade",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -59,9 +59,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU3NzMxM0UzRTI4MkZDRjYKUldUMi9JTGk0eE56Vi93TCs0dEUyL1hBOXEwOEU0RmYvUFgrbWpHa0tWNVFLR1lLdVltRXNvaHYK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU4Q0Q4OEUyRDQ0M0VFOEQKUldTTjdrUFU0b2pOV09Qb0lldlFZTmpHTEJXZHdCNUVGUytPQ1BwTjFjaU9kUU1aQ2VTT2RlZnAK",
       "endpoints": [
-        "https://github.com/guillaume-gagnaire/escouade/releases/latest/download/latest.json"
+        "https://github.com/kulturman/escouade/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "quiet"

@@ -68,7 +68,9 @@ describe('IntegrationsTab', () => {
     backend();
     app.accounts = [{ ...ACCOUNTS[0], inFile: true }, off('trello'), { service: 'github', connected: true, label: '@ada', inFile: false }];
     render(SettingsModal, { tab: 'integrations', projectId: 'p1' });
-    const notes = within(panel()).getAllByText('Trousseau du système indisponible : le jeton reste dans ~/.escouade/integrations.json.');
+    const notes = within(panel()).getAllByText(
+      'Trousseau du système indisponible : le jeton reste dans ~/.escouade-kulturman/integrations.json.',
+    );
     expect(notes).toHaveLength(1);
     expect(notes[0].closest('.acct')).toHaveTextContent('Connecté · ada@atlas.dev · atlas.atlassian.net');
   });
@@ -237,7 +239,7 @@ describe('IntegrationsTab in English', () => {
     expect(p.getByRole('heading', { name: 'Connected accounts' })).toBeInTheDocument();
     expect(p.getByText('Connected · ada@atlas.dev · atlas.atlassian.net')).toBeInTheDocument();
     expect(p.getAllByText('Not connected')).toHaveLength(2);
-    expect(p.getByText('System keychain unavailable: the token stays in ~/.escouade/integrations.json.')).toBeInTheDocument();
+    expect(p.getByText('System keychain unavailable: the token stays in ~/.escouade-kulturman/integrations.json.')).toBeInTheDocument();
     expect(p.getByText('System keychain unreadable: restart Escouade or reconnect the account.')).toBeInTheDocument();
     expect(p.getAllByRole('button', { name: 'Disconnect' })).toHaveLength(2);
     // Trello's first, then Linear's.

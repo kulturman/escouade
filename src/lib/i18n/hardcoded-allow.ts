@@ -27,7 +27,7 @@ export const ALLOWED: Allowed[] = [
   },
   {
     file: 'src/components/settings/AppTab.svelte',
-    text: '~/.escouade/',
+    text: '~/.escouade-kulturman/',
     why: 'un chemin de dossier, pas un texte',
   },
 

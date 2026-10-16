@@ -1,4 +1,6 @@
-# Escouade
+# Escouade K
+
+> **Fork d'[Escouade](https://github.com/guillaume-gagnaire/escouade) maintenu par kulturman.** Il suit Escouade et y ajoute ses propres features, dont la dictée vocale des prompts. Escouade K s'installe à côté d'Escouade sans la toucher : son propre nom (« Escouade K »), son identifiant (`dev.kulturman.escouade`), son dossier de données (`~/.escouade-kulturman/`) et ses mises à jour, depuis les [releases de ce fork](https://github.com/kulturman/escouade/releases). Elle n'envoie aucune statistique d'usage. Le reste de ce fichier décrit Escouade.
 
 Le poste de pilotage de tes agents [Claude Code](https://claude.com/claude-code) : une application Windows, macOS et Linux pour piloter plusieurs instances de Claude Code en local, avec un onglet par projet, autant d'agents que nécessaire, des terminaux intégrés, des notifications quand Claude attend une réponse, les quotas de ton abonnement et des statistiques de consommation. Elle parle français et anglais.
 
@@ -51,6 +53,10 @@ Sous Windows, Claude Code peut aussi être installé dans WSL. Donne son chemin 
 Sous macOS, une app lancée depuis le Finder ou le Dock ne reçoit pas le `PATH` du terminal : Escouade reprend celui de ton shell de connexion (`$SHELL -ilc`) au démarrage, et cherche aussi `claude` dans `~/.local/bin`, `/opt/homebrew/bin` et `/usr/local/bin`.
 
 ## Installation
+
+**Escouade K** : les installeurs sont dans les [releases de ce fork](https://github.com/kulturman/escouade/releases/latest). Ils ne sont pas signés : au premier lancement, macOS demande une confirmation (clic droit sur l'app › Ouvrir) et Windows affiche SmartScreen (« Informations complémentaires › Exécuter quand même »).
+
+Pour Escouade :
 
 **Windows** : télécharge l'installeur `.exe` de la [dernière release](https://github.com/guillaume-gagnaire/escouade/releases/latest).
 
