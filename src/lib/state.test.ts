@@ -467,11 +467,8 @@ describe('AppState start-up', () => {
     expect(app.modal).toEqual({ kind: 'notes', version: '1.6.0', notes: '- Mises à jour silencieuses' });
   });
 
-  it('asks about the usage statistics at the first start, and only until answered', async () => {
-    resetApp();
-    await start({ settings: { ...SETTINGS, telemetry: null } });
-    expect(app.modal).toEqual({ kind: 'telemetry' });
-    for (const telemetry of [true, false]) {
+  it('never asks about the usage statistics: Escouade K sends none', async () => {
+    for (const telemetry of [null, true, false]) {
       resetApp();
       await start({ settings: { ...SETTINGS, telemetry } });
       expect(app.modal).toBeNull();

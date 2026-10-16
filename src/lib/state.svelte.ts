@@ -480,8 +480,7 @@ class AppState {
     this.models = s.models;
     this.restartAt = s.restartAt ?? null;
     this.failedUpdate = s.failedUpdate ?? null;
-    // Not answered yet (closed without a choice: asked again at the next start).
-    if (s.settings.telemetry === null) this.modal = { kind: 'telemetry' };
+    // Escouade K sends no usage statistics (`telemetry::SENDS`): the question is never asked.
     if (s.installed) {
       const { version, notes } = s.installed;
       const tell = () =>
