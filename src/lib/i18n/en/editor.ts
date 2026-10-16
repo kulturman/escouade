@@ -92,6 +92,8 @@ export default defineZone('editor', {
     position: 'Ln {line}, Col {col}',
     tabs: 'Tabs',
     spaces: 'Spaces: {size}',
+    preview: 'Preview',
+    text: 'Text',
   },
 
   tabs: {

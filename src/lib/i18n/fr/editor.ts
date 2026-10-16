@@ -106,6 +106,9 @@ export default {
     position: 'Ln {line}, Col {col}',
     tabs: 'Tabulations',
     spaces: 'Espaces : {size}',
+    /** A Markdown file: shown rendered, or back to its text. */
+    preview: 'Aperçu',
+    text: 'Texte',
   },
 
   tabs: {
