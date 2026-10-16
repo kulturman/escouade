@@ -88,6 +88,13 @@ export default defineZone('editor', {
     missing: 'This file doesn’t exist (or no longer exists).',
   },
 
+  preview: {
+    find: 'Find in preview',
+    count: '{current}/{total}',
+    none: 'No results',
+    close: 'Close search',
+  },
+
   status: {
     position: 'Ln {line}, Col {col}',
     tabs: 'Tabs',

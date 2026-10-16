@@ -11,7 +11,7 @@
   import { navHistory, type NavEntry } from '../../lib/editor/history';
   import { detectIndent } from '../../lib/editor/indent';
   import { languageLabel, loadLanguage } from '../../lib/editor/languages';
-  import Markdown from '../conv/Markdown.svelte';
+  import MarkdownPreview from './MarkdownPreview.svelte';
   import { readTreeWidth, TREE_DEFAULT, TREE_MIN, treeMax, writeTreeWidth } from '../../lib/editor/layout';
   import { DEFAULT_ALIASES, fileSet, linkResolvers, parseAliases, type Aliases } from '../../lib/editor/links';
   import { setEditorJump } from '../../lib/editor/quick-open';
@@ -920,7 +920,7 @@
           <div class="empty">{buf.error}</div>
         {:else}
           {#if previewing}
-            <div class="preview"><Markdown text={buf.text} /></div>
+            <MarkdownPreview text={buf.text} />
           {:else}
             <CodeEditor
               bind:this={code}
@@ -1189,12 +1189,6 @@
     justify-content: center;
     color: var(--muted);
     font-size: 13px;
-  }
-  .preview {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: 20px 28px;
   }
   .preview-toggle {
     height: 20px;

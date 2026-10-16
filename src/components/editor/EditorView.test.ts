@@ -74,6 +74,21 @@ describe('EditorView', () => {
     expect(screen.getByRole('button', { name: 'Aperçu' })).toHaveAttribute('aria-pressed', 'false');
   });
 
+  it('finds in a Markdown preview with Ctrl+F, and closes the search with Escape', async () => {
+    backend();
+    await app.openEditor({ source: 'project', path: 'README.md' });
+    render(EditorView, { project: project() });
+    await userEvent.click(await screen.findByRole('button', { name: 'Aperçu' }));
+    await screen.findByRole('heading', { name: 'demo' });
+    await userEvent.keyboard('{Control>}f{/Control}');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Chercher dans l’aperçu' }), 'dem');
+    expect(screen.getByText('1/1')).toBeInTheDocument();
+    await userEvent.type(screen.getByRole('textbox', { name: 'Chercher dans l’aperçu' }), 'x');
+    expect(screen.getByText('Aucun résultat')).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('search')).toBeNull();
+  });
+
   it('offers no preview for a file that is not Markdown', async () => {
     backend();
     await app.openEditor({ source: 'project', path: 'src/app.ts' });

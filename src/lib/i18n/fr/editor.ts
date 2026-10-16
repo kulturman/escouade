@@ -102,6 +102,14 @@ export default {
   },
 
   /** The status bar under the text (the encoding and the end of lines are written the same in every language). */
+  /** The search of a Markdown file's « Aperçu » (Ctrl+F there). */
+  preview: {
+    find: 'Chercher dans l’aperçu',
+    count: '{current}/{total}',
+    none: 'Aucun résultat',
+    close: 'Fermer la recherche',
+  },
+
   status: {
     position: 'Ln {line}, Col {col}',
     tabs: 'Tabulations',
