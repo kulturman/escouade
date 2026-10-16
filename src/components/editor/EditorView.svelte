@@ -12,6 +12,8 @@
   import { detectIndent } from '../../lib/editor/indent';
   import { languageLabel, loadLanguage } from '../../lib/editor/languages';
   import MarkdownPreview from './MarkdownPreview.svelte';
+  import { editorFont } from '../../lib/editor/fontsize.svelte';
+  import { primaryKey } from '../../lib/platform';
   import { readTreeWidth, TREE_DEFAULT, TREE_MIN, treeMax, writeTreeWidth } from '../../lib/editor/layout';
   import { DEFAULT_ALIASES, fileSet, linkResolvers, parseAliases, type Aliases } from '../../lib/editor/links';
   import { setEditorJump } from '../../lib/editor/quick-open';
@@ -70,6 +72,13 @@
     const asked = reveal && (reveal.line > 1 || reveal.col);
     if (asked && isMarkdown && key && previews[key] !== false) previews[key] = false;
   });
+
+  // Ctrl+wheel (Cmd on macOS) over the editor changes the size of its text, as IntelliJ's option.
+  function wheelZoom(e: WheelEvent) {
+    if (!primaryKey(e) || e.deltaY === 0) return;
+    e.preventDefault();
+    editorFont.step(e.deltaY < 0 ? 1 : -1);
+  }
 
   let status = $state<Record<string, FileStatus>>({});
   let cursor = $state({ line: 1, col: 1 });
@@ -880,7 +889,7 @@
       onresize={(w) => (treeWidth = w)}
       oncommit={writeTreeWidth}
     />
-    <section class="pane">
+    <section class="pane" onwheel={wheelZoom}>
       <EditorTabs {tabs} onselect={(p) => app.openEditor({ projectId: project.id, source, path: p })} onclose={closeTab} />
       {#if !activePath}
         <div class="empty">{t('editor.empty.selectFile')}</div>

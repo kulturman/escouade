@@ -141,6 +141,10 @@
     padding: 20px 28px;
     outline: none;
   }
+  /* The editor's size (`--editor-font`), the conversation's 14px at its default 12.5px. */
+  .preview :global(.md) {
+    font-size: calc(var(--editor-font, 12.5px) * 1.12);
+  }
   .find {
     position: sticky;
     top: -20px;
