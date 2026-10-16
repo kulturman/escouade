@@ -34,7 +34,8 @@ pub enum VoiceEvent {
     Ended { reason: EndReason },
 }
 
-/// What the system says of the app and the microphone.
+/// What the system says of the app and the microphone (macOS asks; the others never refuse).
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
     Granted,
@@ -44,6 +45,7 @@ pub enum Access {
 }
 
 /// macOS's `AVAuthorizationStatus`: not determined (0), restricted (1), denied (2), authorized (3).
+#[cfg(any(target_os = "macos", test))]
 pub fn access_of(status: isize) -> Access {
     match status {
         3 => Access::Granted,
@@ -53,6 +55,7 @@ pub fn access_of(status: isize) -> Access {
 }
 
 /// « Escouade n’a pas accès au micro », as the window shows it too (`voice.muted`).
+#[cfg(target_os = "macos")]
 pub fn denied() -> anyhow::Error {
     anyhow!(tr!(
         "Escouade n’a pas accès au micro",
