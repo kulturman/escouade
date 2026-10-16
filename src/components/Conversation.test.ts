@@ -32,6 +32,7 @@ vi.mock('../lib/terminals', () => ({
 import { applyConvOps, conversationOf, releaseIdle } from '../lib/conversations.svelte';
 import { setLang } from '../lib/i18n';
 import { app } from '../lib/state.svelte';
+import { voice } from '../lib/voice.svelte';
 import type { Agent } from '../lib/types';
 import { answerClock, settle } from '../test/conversation';
 import { agent, fakeBackend, project, resetApp, ticket } from '../test/ipc';
@@ -1747,6 +1748,29 @@ describe('« Vue Claude Code »', () => {
     expect(container.querySelector('.tui')).not.toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Vue Escouade' }));
     expect(b.called('set_agent_view')[0].args).toEqual({ id: 'vt2', terminal: false });
+  });
+
+  it('offers the dictation in the header of the Claude Code view, into the terminal', async () => {
+    setLang('fr');
+    voice.reset();
+    const a = agent({ id: 'vt9', status: 'done', terminal: true });
+    resetApp({ projects: [project()], agents: [a] });
+    const b = fakeBackend({ get_conversation: () => [], voice_models: () => [{ id: 'small-q5_1', bytes: 1, installed: true }] });
+    render(Conversation, { agent: a, project: project() });
+    await userEvent.click(screen.getByRole('button', { name: /^Dicter/ }));
+    await waitFor(() => expect(b.called('voice_start')).toHaveLength(1));
+    expect(voice.target).toEqual({ kind: 'terminal', agentId: 'vt9' });
+    await voice.cancel();
+  });
+
+  it('in the Escouade view, the dictation is the composer’s alone', () => {
+    setLang('fr');
+    voice.reset();
+    const a = agent({ id: 'vt10', status: 'done' });
+    resetApp({ projects: [project()], agents: [a] });
+    fakeBackend({ get_conversation: () => [] });
+    render(Conversation, { agent: a, project: project() });
+    expect(screen.getAllByRole('button', { name: /^Dicter/ })).toHaveLength(1);
   });
 
   it('is never offered to a ticket’s agent', () => {

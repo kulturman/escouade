@@ -51,6 +51,9 @@ import type {
   TranscriptCursor,
   UiEvent,
   UiState,
+  VoiceEvent,
+  VoiceModelState,
+  VoiceProgress,
   WorktreeSuggestion,
 } from './types';
 
@@ -375,4 +378,25 @@ export const api = {
   termKill: (id: string) => invoke<void>('term_kill', { id }),
   playChime: () => invoke<void>('play_chime'),
   quit: () => invoke<void>('quit_app'),
+  /** The speech models of the dictation, with those downloaded. */
+  voiceModels: () => invoke<VoiceModelState[]>('voice_models'),
+  /** Downloads a model (checked by its checksum); refused while it downloads already. */
+  voiceDownload: (model: string, onProgress: (p: VoiceProgress) => void) => {
+    const channel = new Channel<VoiceProgress>();
+    channel.onmessage = onProgress;
+    return invoke<void>('voice_download', { model, onProgress: channel });
+  },
+  voiceCancelDownload: (model: string) => invoke<void>('voice_cancel_download', { model }),
+  voiceDeleteModel: (model: string) => invoke<void>('voice_delete_model', { model }),
+  /** Opens the microphone; `onEvent` gets its level and an end not asked for. */
+  voiceStart: (onEvent: (e: VoiceEvent) => void) => {
+    const channel = new Channel<VoiceEvent>();
+    channel.onmessage = onEvent;
+    return invoke<void>('voice_start', { onEvent: channel });
+  },
+  /** Stops listening: the text heard (empty for a silence). */
+  voiceStop: () => invoke<string>('voice_stop'),
+  voiceCancel: () => invoke<void>('voice_cancel'),
+  /** macOS: the system's privacy pane for the microphone. */
+  voiceOpenPrivacy: () => invoke<void>('voice_open_privacy'),
 };

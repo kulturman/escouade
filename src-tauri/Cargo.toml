@@ -44,6 +44,10 @@ os_info = { version = "3", default-features = false }
 # The name of a Claude account's macOS keychain entry: Claude Code's own hash of its folder, in NFC.
 sha2 = "0.10"
 unicode-normalization = "0.1"
+# The dictation's microphone (`voice::capture`).
+cpal = "0.18"
+# The dictation's transcription, on this machine (`voice::transcribe`); its logs go to `log`.
+whisper-rs = { version = "0.16", features = ["log_backend"] }
 # The MCP server (« Claude et les agents peuvent piloter Escouade »): the official SDK, its Streamable HTTP
 # transport served by hyper on the loopback, the bearer tokens compared in constant time.
 rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
@@ -73,6 +77,10 @@ gtk = "0.18"
 tauri-plugin-notification = "2"
 # The integrations' secrets in the Keychain.
 keyring = { version = "3.6", features = ["apple-native"] }
+# The dictation asks macOS for the microphone (AVCaptureDevice); already built for cpal.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
 
 [profile.release]
 codegen-units = 1

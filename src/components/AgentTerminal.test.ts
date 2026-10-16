@@ -65,6 +65,7 @@ vi.mock('../lib/terminals', () => ({
 
 import { setLang } from '../lib/i18n';
 import { app } from '../lib/state.svelte';
+import { voice } from '../lib/voice.svelte';
 import type { Agent, TuiExit } from '../lib/types';
 import { agent, fakeBackend, project, resetApp } from '../test/ipc';
 import AgentTerminal from './AgentTerminal.svelte';
@@ -116,6 +117,24 @@ const QUICK = 'Claude Code s’est arrêté dès son lancement (code 1). Regarde
 const NO_SESSION = 'Session Claude introuvable : l’interface repart en nouvelle session.';
 
 describe('the agent in Claude Code’s interface', () => {
+  it('shows over the terminal that it listens, then that it transcribes', async () => {
+    const a = agent({ terminal: true });
+    resetApp({ projects: [project()], agents: [a] });
+    fakeBackend();
+    voice.reset();
+    render(AgentTerminal, { agent: a });
+    expect(screen.queryByText(/Dictée en cours/)).toBeNull();
+    voice.target = { kind: 'terminal', agentId: a.id };
+    voice.phase = 'recording';
+    expect(await screen.findByText(/Dictée en cours/)).toBeInTheDocument();
+    voice.phase = 'transcribing';
+    expect(await screen.findByText('Transcription…')).toBeInTheDocument();
+    // Another agent's dictation is not shown here.
+    voice.target = { kind: 'terminal', agentId: 'other' };
+    await waitFor(() => expect(screen.queryByText('Transcription…')).toBeNull());
+    voice.reset();
+  });
+
   it('starts its interface once and shows it', async () => {
     const a = agent({ terminal: true });
     resetApp({ projects: [project()], agents: [a] });

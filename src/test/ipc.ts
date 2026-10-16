@@ -72,6 +72,8 @@ export const SETTINGS: Settings = {
   mcpPort: 0,
   todoTools: true,
   terminalView: false,
+  voiceModel: 'small-q5_1',
+  voiceLanguage: 'ui',
   remoteControlAll: false,
 };
 

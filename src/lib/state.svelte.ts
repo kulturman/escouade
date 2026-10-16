@@ -15,6 +15,7 @@ import { mcp } from './mcp.svelte';
 import { readPref, writePref } from './prefs';
 import { testCommand } from './recipe';
 import type { SettingsTab } from './settings.svelte';
+import type { VoiceTarget } from './voice.svelte';
 import type { FormImage } from './ticket-images';
 import { applyTheme } from './theme';
 import type {
@@ -58,6 +59,8 @@ export type Modal =
    * projects, the one « Rouvrir » was clicked on; it holds only while the path typed is `path`.
    */
   | { kind: 'newProject'; path?: string; historyId?: string }
+  /** The dictation's first use, or its model missing: choose and download it, then listen for `target`. */
+  | { kind: 'voiceSetup'; target: VoiceTarget }
   /** The question of the first start: the usage statistics. */
   | { kind: 'telemetry' }
   /**
@@ -301,6 +304,10 @@ class AppState {
   boardOn = $derived(this.ui.view === 'project' && !!this.project && !!this.board[this.project.id]);
   /** The editor of the project on screen is open, and on screen: the statistics hide it. */
   editorOn = $derived(this.ui.view === 'project' && !!(this.project && this.editor[this.project.id]?.on));
+  /** An agent's conversation (or its Claude Code view) is what the window shows. */
+  get agentOnScreen(): boolean {
+    return this.ui.view === 'project' && !!this.agent && !this.term && !this.runCommand && !this.editorOn && !this.boardOn;
+  }
   split = $derived(this.ui.layout === 'split');
   /** Estimated cost of the turns running now (their exact cost joins `usage.todayCost` at their end). */
   liveCost = $derived(Object.values(this.agents).reduce((sum, a) => sum + (a.liveCost ?? 0), 0));
@@ -669,7 +676,7 @@ class AppState {
 
   /** True when the user can see `id`'s conversation: selected, shown, window in front. */
   private onScreen(id: string): boolean {
-    const shown = this.ui.view === 'project' && this.agent?.id === id && !this.term && !this.runCommand && !this.editorOn && !this.boardOn;
+    const shown = this.agentOnScreen && this.agent?.id === id;
     return shown && (typeof document === 'undefined' || document.hasFocus());
   }
 

@@ -58,6 +58,8 @@ Le [remote control](remote-control) suit les mêmes règles que dans la vue Esco
 - **L’icône de la carte.** Son infobulle dit où en est l’interface : aucune interface lancée (pas joignable pour l’instant), connexion…, connecté, au prochain lancement de l’interface (ouverte avant que le remote control s’allume), ou pas ouvert par Claude Code (compte sans abonnement claude.ai, réseau, proxy ou règle de l’organisation). Éteint pour Escouade mais encore actif dans l’interface ouverte, le remote control garde une icône barrée, dans la couleur d’avertissement, jusqu’au prochain lancement, si l’interface a vraiment eu son lien. Le détail est dans [le remote control](remote-control#l-icone-d-une-interface).
 - **Un message refusé.** Tant qu’une interface lancée en fond n’a jamais été affichée et n’est pas prête (écran du premier lancement, dossier à approuver), un message de la fenêtre ou du serveur MCP est refusé : ouvre l’agent pour voir l’interface.
 
+Pour dicter, clique le micro de l’en-tête de l’agent ou presse `Ctrl+Maj+M` (`⌘⇧M` sous macOS), même quand le terminal a le clavier. Un petit indicateur sur le terminal montre que l’écoute est en cours ; un second clic, ou le même raccourci, arrête et transcrit. Le texte est collé dans l’invite de Claude Code, sans être validé. Voir [Dicter un message](chat#dicter-un-message).
+
 ## Ouvrir les nouveaux agents dans cette vue
 
 Dans Réglages › Claude Code, groupe « Nouveaux agents », l’interrupteur « Ouvrir les nouveaux agents dans l’interface de Claude Code » (désactivé par défaut) fait démarrer chaque nouvel agent dans cette vue. Chaque agent peut ensuite changer de vue depuis son en-tête. Les agents de ticket restent toujours dans la vue d’Escouade. Voir [les réglages de Claude Code](settings-claude-code).

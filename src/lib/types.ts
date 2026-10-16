@@ -48,6 +48,10 @@ export interface Settings {
   todoTools: boolean;
   /** « Ouvrir les nouveaux agents dans l'interface de Claude Code »: a new agent (not a ticket's) starts in the Claude Code view. */
   terminalView: boolean;
+  /** « Dictée › Modèle »: the speech model of the dictation, downloaded on first use. */
+  voiceModel: string;
+  /** « Dictée › Langue parlée »: `ui` (the interface's), `auto` (detected) or a language code. */
+  voiceLanguage: string;
   /** « Remote control pour tous les agents »: every agent of every project is reachable from claude.ai and the Claude app, unless set apart by hand (`Agent.remoteOff`). */
   remoteControlAll: boolean;
 }
@@ -1348,3 +1352,19 @@ export interface Attachment {
   mediaType: string;
   data: string;
 }
+
+/** A speech model of the dictation, as `voice_models` lists it. */
+export interface VoiceModelState {
+  id: string;
+  bytes: number;
+  installed: boolean;
+}
+
+/** How far a model's download is. */
+export interface VoiceProgress {
+  received: number;
+  total: number;
+}
+
+/** What a dictation under way says: the microphone's level, or an end not asked for. */
+export type VoiceEvent = { type: 'level'; value: number } | { type: 'ended'; reason: 'device' | 'limit' | 'muted' };

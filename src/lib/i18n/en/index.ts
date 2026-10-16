@@ -21,6 +21,7 @@ import settings from './settings';
 import shell from './shell';
 import stats from './stats';
 import subagents from './subagents';
+import voice from './voice';
 
 export const en = defineCatalog({
   common,
@@ -43,4 +44,5 @@ export const en = defineCatalog({
   branches,
   plan,
   subagents,
+  voice,
 });

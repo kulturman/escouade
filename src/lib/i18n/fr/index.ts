@@ -20,6 +20,7 @@ import settings from './settings';
 import shell from './shell';
 import stats from './stats';
 import subagents from './subagents';
+import voice from './voice';
 
 export const fr = {
   common,
@@ -42,6 +43,7 @@ export const fr = {
   branches,
   plan,
   subagents,
+  voice,
 } as const;
 
 export type Catalog = typeof fr;

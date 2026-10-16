@@ -7,5 +7,7 @@
     <string>en</string>
     <string>fr</string>
   </array>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Escouade uses the microphone to dictate prompts; the sound is transcribed on your Mac.</string>
 </dict>
 </plist>

@@ -39,7 +39,7 @@ Two places do not wait for the button, because a “Cancel” could not undo wha
 
 ## The “Application” tab
 
-The tab has a single group, “Language”. Both choices take effect as soon as you save, with no restart: the window, the app’s menus, and the texts Escouade writes switch to the new language.
+The tab has two groups, “Language” and “Dictation”. Both language choices take effect as soon as you save, with no restart: the window, the app’s menus, and the texts Escouade writes switch to the new language.
 
 | Setting | Effect | Default |
 |---|---|---|
@@ -68,3 +68,14 @@ The three choices are “Same as the interface (default)”, “English”, and 
 
 > [!TIP]
 > Many teams commit in English with an interface in French: pick “Français” for the interface and “English” for the texts Claude writes.
+
+## Dictation
+
+The “Dictation” group sets up [message dictation](chat#dictating-a-message). The microphone is transcribed on your machine by Whisper; nothing goes online.
+
+| Setting | Effect | Default |
+|---|---|---|
+| “Model” | The speech model. The bigger, the more accurate and the slower. The one chosen is downloaded on the first dictation if missing. | “Small” (190 MB) |
+| “Spoken language” | The language you speak. Automatic detection is wrong more often on a short prompt. | “Interface language” |
+
+The models offered: “Tiny” (78 MB, the fastest, often wrong), “Base” (148 MB, fast, rough), “Small” (190 MB, accurate and fast, recommended), “Large turbo” (574 MB, the most accurate, for a powerful machine). Each line says whether the model is installed: “Download” fetches it right away (with a progress bar and “Cancel”), “Delete” frees its disk space. The model and language you choose are saved with the other settings; downloading and deleting act right away.

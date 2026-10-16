@@ -20,6 +20,9 @@
   import type { Agent, QuestionItem } from '../lib/types';
   import Dropdown from './Dropdown.svelte';
   import { tip } from '../lib/tip';
+  import { voice } from '../lib/voice.svelte';
+  import { insertDictation } from '../lib/voice-text';
+  import MicButton from './MicButton.svelte';
 
   let { agent }: { agent: Agent } = $props();
 
@@ -124,6 +127,22 @@
     queueMicrotask(() => ta?.focus());
   });
 
+  // Dictated text goes in place of the selection, or at the caret, of the agent shown; another's goes to its draft.
+  $effect(() => {
+    const id = agentId;
+    return voice.registerInserter(id, (dictated) => {
+      const start = ta?.selectionStart ?? text.length;
+      const end = ta?.selectionEnd ?? text.length;
+      const r = insertDictation(text, start, end, dictated);
+      text = r.text;
+      queueMicrotask(() => {
+        ta?.setSelectionRange(r.caret, r.caret);
+        ta?.focus();
+        autosize();
+      });
+    });
+  });
+
   function autosize() {
     if (!ta) return;
     ta.style.height = 'auto';
@@ -217,6 +236,13 @@
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
+      return;
+    }
+    // Escape while dictating cancels the dictation, not Claude's turn.
+    if (e.key === 'Escape' && voice.phase === 'recording' && voice.isFor({ kind: 'composer', agentId })) {
+      e.preventDefault();
+      e.stopPropagation();
+      void voice.cancel();
       return;
     }
     if (e.key === 'Escape' && busy) {
@@ -551,6 +577,7 @@
           ><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" /></svg
         >
       </button>
+      <MicButton target={{ kind: 'composer', agentId }} />
       <button
         class="btn primary"
         use:tip={busy && !pendingItem

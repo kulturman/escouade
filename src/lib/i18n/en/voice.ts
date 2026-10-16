@@ -1,0 +1,58 @@
+import { defineZone } from '../types';
+
+// The dictation: the microphone button, the first use's window, its toasts, its settings.
+export default defineZone('voice', {
+  button: {
+    start: 'Dictate ({key})',
+    stop: 'Stop and transcribe ({key})',
+    transcribing: 'Transcribing…',
+  },
+  overlay: {
+    listening: 'Dictating · {key} to stop',
+    transcribing: 'Transcribing…',
+  },
+  nothingHeard: 'Nothing heard',
+  limit: 'Dictation stopped after 5 minutes',
+  muted: 'Escouade can’t access the microphone',
+  openPrivacy: 'Open settings',
+  copied: 'The terminal is closed: the dictated text is on the clipboard',
+  model: {
+    tiny: { name: 'Tiny', desc: 'the fastest, often wrong' },
+    base: { name: 'Base', desc: 'fast, rough' },
+    small: { name: 'Small', desc: 'accurate and fast' },
+    largeTurbo: { name: 'Large turbo', desc: 'the most accurate, for a powerful machine' },
+    recommended: 'recommended',
+    installed: 'Installed',
+  },
+  setup: {
+    title: 'Voice dictation',
+    body: 'Transcription happens on your machine: neither the sound nor the text goes online. It needs a speech recognition model, downloaded once. Choose it:',
+    later: 'You can change it in Settings › Application › Dictation.',
+    download: 'Download and dictate',
+    dictate: 'Dictate',
+    retry: 'Retry',
+    progress: '{received} of {total}',
+  },
+  settings: {
+    group: 'Dictation',
+    note: 'The microphone is transcribed on your machine by Whisper; nothing goes online.',
+    model: 'Model',
+    modelDesc: 'The bigger, the more accurate and the slower. The one chosen is downloaded on the first dictation if missing.',
+    download: 'Download',
+    delete: 'Delete',
+    cancel: 'Cancel',
+    language: 'Spoken language',
+    languageDesc: 'Automatic detection is wrong more often on a short prompt.',
+    languages: {
+      ui: 'Interface language',
+      auto: 'Automatic detection',
+      fr: 'French',
+      en: 'English',
+      es: 'Spanish',
+      de: 'German',
+      it: 'Italian',
+      pt: 'Portuguese',
+      nl: 'Dutch',
+    },
+  },
+});

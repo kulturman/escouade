@@ -58,6 +58,7 @@ mod tui;
 mod tui_tests;
 mod updates;
 mod usage;
+mod voice;
 mod which;
 mod worktrees;
 mod wsl;
@@ -415,6 +416,14 @@ pub fn run() {
             commands::telemetry_set,
             commands::mcp_declare_status,
             commands::mcp_manual_command,
+            commands::voice_models,
+            commands::voice_download,
+            commands::voice_cancel_download,
+            commands::voice_delete_model,
+            commands::voice_start,
+            commands::voice_stop,
+            commands::voice_cancel,
+            commands::voice_open_privacy,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the application")

@@ -51,6 +51,14 @@ The files of one message don’t exceed 18 MB in all. A rejected file (unknown f
 
 Attached files don’t go with an answer to a question or a permission: they stay ready for your next message. In the Claude Code view, Escouade’s message field isn’t shown: only an image (a screenshot, for instance) can be attached there, pasted into the terminal; see [the Claude Code view](claude-code-view).
 
+### Dictating a message
+
+The microphone, between the paperclip and “Send”, listens to what you say; a second click stops listening and transcribes. `Ctrl+Shift+M` (`⌘⇧M` on macOS) does the same. The text goes where the cursor is, in place of the selected text if any, and is never sent on its own: you read it, fix it, and send. While listening, the button turns red with a gauge of the microphone’s level; `Esc` cancels the dictation without inserting anything.
+
+Transcription happens on your machine, by Whisper: neither the sound nor the text goes online. On the first dictation, Escouade has you choose a speech model and downloads it once (from 78 MB to 574 MB; “Small”, 190 MB, is recommended). The model and the spoken language can be changed in [Settings › Application](settings-application#dictation).
+
+If you switch to another agent during the transcription, the text still goes to the draft of the agent you dictated for. A silence inserts nothing (“Nothing heard”); a dictation stops by itself after 5 minutes. On macOS, the first dictation asks for access to the microphone; if it’s denied, Escouade says so and offers to open the system settings.
+
 ### Mentioning a file with @
 
 Type `@` at the start of a message or after a space, then part of the name: Escouade lists up to 12 files from the agent’s folder (its worktree if it has one), with their folder. `↑` and `↓` choose, `Enter` or `Tab` (or a click) insert `@path/to/file`, `Esc` closes the list. The search is approximate: a few letters of the name are enough. It covers the files git knows (tracked, or untracked but not ignored); outside a git repository, the folder is walked without dependency and build folders.

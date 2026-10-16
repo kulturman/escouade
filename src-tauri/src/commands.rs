@@ -1787,3 +1787,182 @@ mod tests {
         assert!(back && again.id == p.id);
     }
 }
+
+// « Dictée » (ESC-96): the microphone heard and transcribed on this machine.
+
+use crate::voice::{self, capture::VoiceEvent, models::ModelState};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// How far a model's download is, as the window's bar shows it.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgress {
+    received: u64,
+    total: u64,
+}
+
+fn voice_model(id: &str) -> Res<&'static voice::models::Model> {
+    voice::models::find(id).ok_or_else(|| tr!("modèle inconnu : {id}", "unknown model: {id}"))
+}
+
+/// The models, with those installed. The parts a download cut short left (the app quit) are
+/// removed on the way, but those of the downloads under way.
+#[tauri::command]
+pub fn voice_models(core: CoreState) -> Vec<ModelState> {
+    let dir = core.data.voice_dir();
+    let downloading: Vec<String> = core.voice.downloads.lock().keys().cloned().collect();
+    let downloading: Vec<&str> = downloading.iter().map(String::as_str).collect();
+    voice::models::remove_stale_parts(&dir, &downloading);
+    voice::models::states(&dir)
+}
+
+/// Downloads a model; refused while the same one downloads already.
+#[tauri::command]
+pub async fn voice_download(
+    core: CoreState<'_>,
+    model: String,
+    on_progress: Channel<DownloadProgress>,
+) -> Res<()> {
+    let m = voice_model(&model)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut downloads = core.voice.downloads.lock();
+        if downloads.contains_key(&model) {
+            return Err(tr!(
+                "ce modèle est déjà en cours de téléchargement",
+                "this model is already downloading"
+            ));
+        }
+        downloads.insert(model.clone(), cancel.clone());
+    }
+    let client = crate::usage::download_client(&core.settings.read()).map_err(err);
+    let result = match client {
+        Ok(client) => voice::models::download(
+            &client,
+            &voice::models::base_url(),
+            &core.data.voice_dir(),
+            m,
+            &cancel,
+            |received, total| {
+                let _ = on_progress.send(DownloadProgress { received, total });
+            },
+        )
+        .await
+        .map_err(err),
+        Err(e) => Err(e),
+    };
+    core.voice.downloads.lock().remove(&model);
+    result
+}
+
+#[tauri::command]
+pub fn voice_cancel_download(core: CoreState, model: String) {
+    if let Some(flag) = core.voice.downloads.lock().get(&model) {
+        flag.store(true, Ordering::Release);
+    }
+}
+
+/// Off the window's thread: letting Whisper go waits for a model being loaded.
+#[tauri::command]
+pub async fn voice_delete_model(core: CoreState<'_>, model: String) -> Res<()> {
+    let m = voice_model(&model)?;
+    let whisper = core.voice.whisper.clone();
+    let path = voice::models::path(&core.data.voice_dir(), m);
+    tauri::async_runtime::spawn_blocking(move || {
+        whisper.unload();
+        let part = path.with_file_name(format!("{}.part", m.file));
+        let _ = std::fs::remove_file(part);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Opens the microphone (on macOS, after asking the user when the system never did). A dictation
+/// a reloaded window left open is stopped first. Off the async threads: opening the device, and the
+/// system's question, block.
+#[tauri::command]
+pub async fn voice_start(core: CoreState<'_>, on_event: Channel<VoiceEvent>) -> Res<()> {
+    let id = core.settings.read().voice_model.clone();
+    let m = voice_model(&id)?;
+    if !voice::models::is_installed(&core.data.voice_dir(), m) {
+        return Err(tr!(
+            "le modèle de dictée n’est pas installé",
+            "the dictation model isn’t installed"
+        ));
+    }
+    // One microphone: the one left open is let go of before opening it again.
+    let old = core.voice.take_capture();
+    let capture = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(old) = old {
+            old.finish();
+        }
+        voice::capture::Capture::start(move |e| {
+            let _ = on_event.send(e);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(err)?;
+    if let Some(old) = core.voice.put_capture(capture) {
+        tauri::async_runtime::spawn_blocking(move || old.finish());
+    }
+    Ok(())
+}
+
+/// Stops listening and hands back the text (empty for a silence). The model stays loaded five
+/// minutes for the next dictation.
+#[tauri::command]
+pub async fn voice_stop(core: CoreState<'_>) -> Res<String> {
+    let capture = core
+        .voice
+        .take_capture()
+        .ok_or_else(|| tr!("aucune dictée en cours", "no dictation under way"))?;
+    let (id, setting) = {
+        let s = core.settings.read();
+        (s.voice_model.clone(), s.voice_language.clone())
+    };
+    let language = voice::language(&setting, core.lang().ui);
+    let path = voice::models::path(&core.data.voice_dir(), voice_model(&id)?);
+    let whisper = core.voice.whisper.clone();
+    let generation = whisper.touch();
+    let w = whisper.clone();
+    let text = tauri::async_runtime::spawn_blocking(move || {
+        let audio = capture.finish();
+        if voice::audio::is_silent(&audio) {
+            return Ok(String::new());
+        }
+        w.transcribe(&path, &audio, language.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(err)?;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        whisper.unload_if(generation);
+    });
+    Ok(text)
+}
+
+#[tauri::command]
+pub fn voice_cancel(core: CoreState) {
+    if let Some(c) = core.voice.take_capture() {
+        // Joining the capture thread blocks: off the window's thread.
+        tauri::async_runtime::spawn_blocking(move || c.finish());
+    }
+}
+
+/// « Ouvrir les réglages » of « Escouade n’a pas accès au micro »: the system's privacy pane for
+/// the microphone (macOS); nothing elsewhere.
+#[tauri::command]
+pub fn voice_open_privacy() -> Res<()> {
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}

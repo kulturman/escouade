@@ -20,6 +20,7 @@ Escouade keeps its data in `~/.escouade/` (`C:\Users\<you>\.escouade` on Windows
 | `mcp/<agent>.json` | The MCP configuration of an Escouade agent, with its token. Deleted when its process stops, and each time the app starts and quits. |
 | `tui/<agent>.json` | The hook settings that an agent’s Claude Code view passes to Claude Code. The token isn’t in it: it goes through an environment variable. |
 | `logs/<agent>-setup.log` | The full output of the last setup of an agent’s worktree. Deleted with the agent; that of a closed project stays with its history. |
+| `voice/` | The dictation’s speech models, downloaded on demand (78 MB to 574 MB each). Settings › Application › Dictation deletes them. |
 | `update.json` | The update being installed, noted for the next start and then deleted. |
 | `stats.db` | The statistics (a SQLite database, with its `stats.db-wal` and `stats.db-shm` files while Escouade runs). |
 | `telemetry-id` | The random id of this install, for the usage statistics. Created when you accept them, deleted when you refuse or turn them off. |

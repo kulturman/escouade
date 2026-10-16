@@ -39,7 +39,7 @@ Deux endroits n’attendent pas le bouton, parce qu’un « Annuler » ne pour
 
 ## L’onglet « Application »
 
-L’onglet n’a qu’un groupe, « Langue ». Les deux choix prennent effet dès l’enregistrement, sans redémarrer : la fenêtre, les menus de l’app et les textes qu’Escouade écrit passent dans la nouvelle langue.
+L’onglet a deux groupes, « Langue » et « Dictée ». Les deux choix de langue prennent effet dès l’enregistrement, sans redémarrer : la fenêtre, les menus de l’app et les textes qu’Escouade écrit passent dans la nouvelle langue.
 
 | Réglage | Effet | Par défaut |
 |---|---|---|
@@ -68,3 +68,14 @@ Les trois choix sont « Comme l’interface (par défaut) », « English » 
 
 > [!TIP]
 > Beaucoup d’équipes commitent en anglais avec une interface en français : choisis « Français » pour l’interface et « English » pour les textes de Claude.
+
+## Dictée
+
+Le groupe « Dictée » règle la [dictée des messages](chat#dicter-un-message). Le micro est transcrit sur ta machine par Whisper ; rien ne part en ligne.
+
+| Réglage | Effet | Par défaut |
+|---|---|---|
+| « Modèle » | Le modèle de reconnaissance de la parole. Plus il est gros, plus il est juste et lent. Celui choisi est téléchargé à la première dictée s’il manque. | « Small » (190 Mo) |
+| « Langue parlée » | La langue que tu parles. La détection automatique se trompe plus souvent sur un prompt court. | « Langue de l’interface » |
+
+Les modèles proposés : « Tiny » (78 Mo, le plus rapide, se trompe souvent), « Base » (148 Mo, rapide, approximatif), « Small » (190 Mo, juste et rapide, recommandé), « Large turbo » (574 Mo, le plus juste, pour une machine puissante). Chaque ligne dit si le modèle est installé : « Télécharger » le récupère tout de suite (avec une barre de progression et « Annuler »), « Supprimer » libère sa place sur le disque. Le choix du modèle et de la langue s’enregistre avec les autres réglages ; télécharger et supprimer agissent tout de suite.

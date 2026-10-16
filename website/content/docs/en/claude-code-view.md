@@ -58,6 +58,8 @@ A message sent to the agent from elsewhere, for example through the [MCP server]
 - **The card’s icon.** Its tooltip says how the interface is doing: no interface running (not reachable for now), connecting…, connected, from the next launch of the interface (open before remote control was turned on), or not opened by Claude Code (no claude.ai subscription, network, proxy or organization policy). Off for Escouade but still on in the open interface, remote control keeps a crossed-out icon, in the warning color, until the next launch, if the interface really had its link. The detail is in [remote control](remote-control#the-icon-of-an-interface).
 - **A refused message.** As long as an interface started in the background has never been shown and isn’t ready (first-launch screen, a folder to approve), a message from the window or from the MCP server is refused: open the agent to see the interface.
 
+To dictate, click the microphone in the agent’s header or press `Ctrl+Shift+M` (`⌘⇧M` on macOS), even when the terminal has the keyboard. A small indicator over the terminal shows that it’s listening; a second click, or the same shortcut, stops and transcribes. The text is pasted into Claude Code’s prompt, without being submitted. See [Dictating a message](chat#dictating-a-message).
+
 ## Opening new agents in this view
 
 In Settings › Claude Code, group “New agents”, the “Open new agents in Claude Code’s interface” switch (off by default) makes each new agent start in this view. Each agent can then switch views from its header. Ticket agents always stay in Escouade’s view. See [the Claude Code settings](settings-claude-code).

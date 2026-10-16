@@ -332,6 +332,11 @@ impl DataDir {
         self.0.join("conversations")
     }
 
+    /// The dictation's speech models (`voice::models`), downloaded on demand.
+    pub fn voice_dir(&self) -> PathBuf {
+        self.0.join("voice")
+    }
+
     /// The projects closed with their history kept, one file each (`closed::ClosedProject`).
     pub fn closed_projects(&self) -> PathBuf {
         self.0.join("closed-projects")

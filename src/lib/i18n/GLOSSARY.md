@@ -484,3 +484,14 @@ La liste sous la carte d’un agent et la conversation de chaque sous-agent (`su
 | Ouvrir sa conversation | Open its conversation | le bouton au-dessus d’une demande d’un sous-agent, et le bouton ↗ de la ligne de son appel (« Ouvrir la conversation du sous-agent … » → “Open the conversation of the subagent …”) |
 | Ouvrir la conversation d’un sous-agent | Open the conversation of a subagent | le bouton de la pile de points du bandeau « Plan » quand plusieurs sous-agents tournent (il ouvre un menu pour choisir lequel) ; avec un seul, il porte le nom de ce sous-agent (« Ouvrir la conversation du sous-agent … ») |
 | Demande du sous-agent « nom » | Request of the subagent “name” | la ligne au-dessus d’une question ou d’une autorisation qu’un sous-agent a posée |
+
+## V — voice
+
+| Français | Anglais | Note |
+|---|---|---|
+| dictée, dicter | dictation, dictate | « Dicter (Ctrl+Maj+M) » → “Dictate (Ctrl+Shift+M)” ; le groupe « Dictée » des réglages → “Dictation” |
+| Dictée vocale | Voice dictation | le titre de la fenêtre du premier usage |
+| modèle (de reconnaissance de la parole) | (speech) model | Tiny, Base, Small, Large turbo : noms propres, jamais traduits |
+| langue parlée | spoken language | le réglage de la dictée ; « Langue de l’interface » → “Interface language” |
+| transcription, transcrire | transcription, transcribe | « Arrêter et transcrire » → “Stop and transcribe” |
+| Rien entendu | Nothing heard | toast d’une dictée silencieuse |

@@ -51,6 +51,14 @@ Les fichiers d’un même message ne dépassent pas 18 Mo en tout. Un fichier re
 
 Les fichiers joints n’accompagnent pas une réponse à une question ou à une autorisation : ils restent prêts pour ton prochain message. Dans la vue Claude Code, le champ de saisie d’Escouade n’est pas affiché : seule une image (une capture d’écran, par exemple) s’y joint, collée dans le terminal ; voir [la vue Claude Code](claude-code-view).
 
+### Dicter un message
+
+Le micro, entre le trombone et « Envoyer », écoute ce que tu dis ; un second clic arrête l’écoute et transcrit. `Ctrl+Maj+M` (`⌘⇧M` sous macOS) fait la même chose. Le texte s’insère là où est le curseur, à la place du texte sélectionné s’il y en a, et ne part jamais tout seul : tu le relis, tu le corriges, tu envoies. Pendant l’écoute, le bouton passe au rouge avec une jauge du niveau du micro ; `Échap` annule la dictée sans rien insérer.
+
+La transcription se fait sur ta machine, par Whisper : ni le son ni le texte ne partent en ligne. À la première dictée, Escouade te fait choisir un modèle de reconnaissance de la parole et le télécharge une fois (de 78 Mo à 574 Mo ; « Small », 190 Mo, est recommandé). Le modèle et la langue parlée se changent dans [Réglages › Application](settings-application#dictee).
+
+Si tu passes à un autre agent pendant la transcription, le texte va quand même dans le brouillon de l’agent pour lequel tu as dicté. Un silence n’insère rien (« Rien entendu ») ; une dictée s’arrête d’elle-même au bout de 5 minutes. Sous macOS, la première dictée demande l’accès au micro ; refusé, Escouade le dit et propose d’ouvrir les réglages du système.
+
 ### Mentionner un fichier avec @
 
 Tape `@` au début d’un message ou après une espace, puis une partie du nom : Escouade liste jusqu’à 12 fichiers du dossier de l’agent (son worktree s’il en a un), avec leur dossier. `↑` et `↓` choisissent, `Entrée` ou `Tab` (ou un clic) insèrent `@chemin/du/fichier`, `Échap` ferme la liste. La recherche est approximative : quelques lettres du nom suffisent. Elle porte sur les fichiers que git connaît (suivis, ou non suivis mais pas ignorés) ; hors d’un dépôt git, le dossier est parcouru sans les dossiers de dépendances et de build.
