@@ -36,6 +36,12 @@ const FAMILIES: Record<string, string> = {
   py: 'python',
   pyi: 'python',
   go: 'go',
+  // Java and Kotlin call each other's classes.
+  java: 'jvm',
+  kt: 'jvm',
+  kts: 'jvm',
+  php: 'php',
+  cs: 'cs',
 };
 const familyOf = (path: string) => FAMILIES[extOf(path)] ?? extOf(path);
 
@@ -45,6 +51,11 @@ const DEFINES: Record<string, string> = {
   rust: String.raw`\b(fn|struct|enum|trait|type|mod|const|static|macro_rules!)\s+NAME\b`,
   python: String.raw`\b(def|class)\s+NAME\b`,
   go: String.raw`\bfunc\s+(\([^)]*\)\s*)?NAME\b|\btype\s+NAME\b`,
+  // A type, a Kotlin function (an extension one too) or property, a Java method: a modifier, a return type, the name.
+  // No escape between brackets: git grep -E (POSIX) would read the backslash as a character.
+  jvm: String.raw`\b(class|interface|enum|record|object|typealias|val|var)\s+NAME\b|@interface\s+NAME\b|\bfun\s+(<[^>]*>\s*)?([A-Za-z0-9_.<>?]+\.)?NAME\b|\b(public|protected|private|static|final|abstract|synchronized|default|native|override|suspend|open|internal|inline)\s+([^ (=;]+\s+)*NAME\s*\(`,
+  php: String.raw`\b(class|interface|trait|enum|function|const)\s+NAME\b`,
+  cs: String.raw`\b(class|interface|struct|enum|record|delegate)\s+NAME\b|\b(public|private|protected|internal|static|override|virtual|abstract|async|sealed)\s+([^ (=;]+\s+)*NAME\s*[(<]`,
 };
 const DEFINES_ELSE = String.raw`\bNAME\b\s*[:=(]`;
 
@@ -65,6 +76,11 @@ function gitPattern(template: string, name: string): string {
     .join('')
     .split('NAME')
     .join(escapeRegExp(name));
+}
+
+/** What `searched` takes for a definition of `name` in a file like `path`, as JavaScript reads it (the tests). */
+export function definitionPattern(path: string, name: string): RegExp {
+  return exactPattern(DEFINES[familyOf(path)] ?? DEFINES_ELSE, name);
 }
 
 /** A character of a name, in most languages: none may come right before or after the one looked for. */

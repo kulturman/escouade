@@ -321,6 +321,59 @@ const pythonResolver: NavResolver = ({ state, pos, path, files }) => {
   return t === null ? null : spot(h, { path: t });
 };
 
+/**
+ * The files of the source whose path ends with one of `suffixes` (`com/acme/User.java`, `Models/User.php`), the
+ * longest suffix first: a package or a namespace is a folder path somewhere in the source (`src/main/java/`, `app/`).
+ * Without case for PHP, whose `App\` namespace is Laravel's `app/` folder.
+ */
+function endingWith(files: readonly string[], suffixes: string[], anyCase: boolean): string[] {
+  const norm = (s: string) => (anyCase ? s.toLowerCase() : s);
+  for (const suffix of suffixes) {
+    const end = norm(suffix);
+    const found = files.filter((f) => norm(f) === end || norm(f).endsWith(`/${end}`));
+    if (found.length) return found;
+  }
+  return [];
+}
+
+/** `import com.acme.User;`, `import static com.acme.User.NAME;`, Kotlin's `import com.acme.User as U`. */
+const JVM_IMPORT = /^\s*import\s+(?:static\s+)?([A-Za-z_][\w.]*)/dg;
+
+/** The files of the class an import names: its package's folders, the class's file (its member left out). */
+export function jvmImportTargets(spec: string, files: readonly string[]): string[] {
+  const parts = spec.split('.');
+  // A static import's member (a method, a CONSTANT after its class), a Kotlin top-level function: not a class's name.
+  const member = (i: number) => !/^[A-Z]/.test(parts[i]) || (/^[A-Z][A-Z0-9_]+$/.test(parts[i]) && /^[A-Z]/.test(parts[i - 1] ?? ''));
+  while (parts.length > 1 && member(parts.length - 1)) parts.pop();
+  if (!/^[A-Z]/.test(parts[parts.length - 1] ?? '')) return [];
+  const path = parts.join('/');
+  return endingWith(files, [`${path}.java`, `${path}.kt`], false);
+}
+
+const jvmResolver: NavResolver = ({ state, pos, path, files }) => {
+  if (!['java', 'kt', 'kts'].includes(extOf(path))) return null;
+  const h = hitAt(state, pos, JVM_IMPORT, 1);
+  if (!h) return null;
+  return { from: h.from, to: h.to, resolve: async () => jvmImportTargets(h.text, files).map((p) => ({ path: p })) };
+};
+
+/** `use App\Models\User;`, `use App\Models\User as U;`, `use function App\helper;` (the first of a group). */
+const PHP_USE = /^\s*use\s+(?:function\s+|const\s+)?\\?([A-Za-z_][\w\\]*)/dg;
+
+/** The files of the class a `use` names: its namespace as folders, the longest that the source has. */
+export function phpUseTargets(spec: string, files: readonly string[]): string[] {
+  const parts = spec.split('\\').filter(Boolean);
+  const suffixes = parts.map((_, i) => `${parts.slice(i).join('/')}.php`);
+  return endingWith(files, suffixes.slice(0, -1).length ? suffixes.slice(0, -1) : suffixes, true);
+}
+
+const phpResolver: NavResolver = ({ state, pos, path, files }) => {
+  if (extOf(path) !== 'php') return null;
+  const h = hitAt(state, pos, PHP_USE, 1);
+  if (!h) return null;
+  return { from: h.from, to: h.to, resolve: async () => phpUseTargets(h.text, files).map((p) => ({ path: p })) };
+};
+
 const MARKDOWN = new Set(['md', 'markdown', 'mdx']);
 const MARKUP = new Set(['html', 'htm', 'svelte', 'vue', ...MARKDOWN]);
 const MD_LINKS = [
@@ -377,5 +430,5 @@ const pathResolver: NavResolver = ({ state, pos, path, files }) => {
 
 /** The resolvers of links, in the order they are tried; `aliases` are read at each use (they load with the tree). */
 export function linkResolvers(aliases: () => Aliases): NavResolver[] {
-  return [importResolver(aliases), styleResolver, rustResolver, pythonResolver, markupResolver, pathResolver];
+  return [importResolver(aliases), styleResolver, rustResolver, pythonResolver, jvmResolver, phpResolver, markupResolver, pathResolver];
 }
