@@ -24,12 +24,31 @@ export default {
       connected: 'Remote control : connecté (accessible depuis claude.ai et l’app Claude)',
       connecting: 'Remote control : connexion… (accessible depuis claude.ai et l’app Claude)',
       waiting: 'Remote control : en attente de connexion (accessible depuis claude.ai et l’app Claude)',
+      /** An agent in Claude Code’s view with the remote control on: no interface runs (not started yet, or ended): not reachable. */
+      noInterface: 'Remote control : aucune interface lancée, pas joignable pour l’instant (ouvre l’agent pour la lancer)',
+      /** Its interface was started without the remote control, which its next launch has. */
+      nextLaunch: 'Remote control : au prochain lancement de son interface Claude Code',
+      /** Its interface runs but Claude Code did not open the remote control (no claude.ai subscription, network, proxy or organization policy). */
+      unavailable:
+        'Remote control : pas ouvert par Claude Code (compte sans abonnement claude.ai, réseau, proxy ou règle de l’organisation)',
+      /** Off for Escouade, but its interface, still open, stays linked to claude.ai (it is off: no source follows). */
+      stillOn:
+        'Remote control encore actif dans l’interface ouverte, jusqu’à son prochain lancement (sa commande /remote-control le coupe)',
+      /** `{state}`: one of the states above; `{source}`: where the remote control comes from (below). */
+      withSource: '{state} · {source}',
+      source: {
+        hand: 'activé à la main',
+        project: 'activé par le réglage du projet',
+        global: 'activé par le réglage de tous les agents',
+      },
     },
     terminals: 'Terminaux',
     newTerminal: 'Nouveau terminal',
     noTerminals: 'Aucun terminal ouvert',
     exited: 'terminé',
     noShell: 'Aucun shell détecté (PowerShell 7, Git Bash, WSL). Vérifie les réglages.',
+    /** In the menu of the « + » of the terminals: opens the list of the agents whose worktree can hold one. */
+    inWorktree: 'Dans le worktree de…',
     modified: '~{n} modifiés',
     added: '+{n} ajoutés',
     deleted: '−{n} supprimés',
@@ -101,7 +120,9 @@ export default {
   project: {
     closeTitle: 'Fermer « {name} » ?',
     closeBody:
-      "Le projet et ses agents sont retirés de l'application (conversations comprises). Les fichiers et les worktrees sur le disque ne sont pas touchés.",
+      "Le projet quitte l'application : ses agents, ses terminaux et ses lancements s'arrêtent. Son historique (conversations, tickets, réglages) est gardé : rouvrir ce dossier le retrouve. Les fichiers et les worktrees sur le disque ne sont pas touchés.",
     closeConfirm: 'Fermer le projet',
+    /** The box of the question, unchecked: closing keeps the history unless it is checked. */
+    closeErase: 'Effacer aussi son historique (conversations, tickets, réglages)',
   },
 } as const satisfies Tree;

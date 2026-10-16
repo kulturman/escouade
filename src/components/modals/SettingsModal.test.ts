@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { flushSync } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -220,6 +220,42 @@ describe('SettingsModal', () => {
     await userEvent.click(todo);
     await userEvent.click(todo);
     expect(todo).toHaveAttribute('aria-checked', 'true');
+    expect(tab('Claude Code')).not.toHaveClass('changed');
+    await save();
+    expect(backend.called('save_settings')).toHaveLength(0);
+  });
+
+  it('makes every agent reachable by remote control from its own group, beside the MCP switch, off until the user switches it on', async () => {
+    const backend = backendSaving();
+    render(SettingsModal);
+    const remote = group('Remote control');
+    const all = remote.getByRole('switch', { name: 'Remote control pour tous les agents' });
+    expect(all).toHaveAttribute('aria-checked', 'false');
+    expect(remote.getByText(/^Chaque agent de chaque projet, existant ou nouveau \(agents des tickets compris\)/)).toHaveTextContent(
+      'Chaque agent de chaque projet, existant ou nouveau (agents des tickets compris), est accessible depuis claude.ai et l’app Claude. Escouade lance tout de suite le process claude de chacun, qui reste lancé. La session apparaît sur claude.ai sous le nom « projet · agent » (pour un agent de ticket, son nom vient du ticket). En vue Claude Code, une interface déjà ouverte ne le prend qu’à son prochain lancement. Pour mettre un agent à part : clic droit, « Désactiver le remote control ».',
+    );
+    // Right before the MCP server’s switch, not after its activity log, which can be long.
+    const headings = within(panel())
+      .getAllByRole('heading')
+      .map((h) => h.textContent);
+    expect(headings.slice(-3)).toEqual(['Remote control', 'Escouade dans Claude', 'Activité MCP']);
+    expect(tab('Claude Code')).not.toHaveClass('changed');
+    await userEvent.click(all);
+    expect(all).toHaveAttribute('aria-checked', 'true');
+    // A setting of the draft like the others: marked, saved by « Enregistrer ».
+    expect(tab('Claude Code')).toHaveClass('changed');
+    expect(backend.called('save_settings')).toHaveLength(0);
+    await save();
+    expect(backend.called('save_settings')[0].args.settings).toMatchObject({ remoteControlAll: true });
+    expect(app.settings.remoteControlAll).toBe(true);
+  });
+
+  it('puts the remote control of all agents back, and saves nothing when it is switched on again', async () => {
+    const backend = backendSaving();
+    render(SettingsModal);
+    const all = screen.getByRole('switch', { name: 'Remote control pour tous les agents' });
+    await userEvent.click(all);
+    await userEvent.click(all);
     expect(tab('Claude Code')).not.toHaveClass('changed');
     await save();
     expect(backend.called('save_settings')).toHaveLength(0);
@@ -823,12 +859,80 @@ describe('SettingsModal', () => {
     expect(screen.getByText('Aucun projet ouvert.')).toBeInTheDocument();
   });
 
+  describe('the projects closed with their history', () => {
+    const OLD = {
+      id: 'c1',
+      name: 'ancien',
+      color: 'oklch(0.72 0.12 300)',
+      path: 'C:\code\ancien',
+      worktreePerAgent: false,
+      agents: 3,
+      tickets: 5,
+      lastActivity: new Date(2026, 9, 14, 18, 0).getTime(),
+      closedAt: new Date(2026, 9, 15, 9, 0).getTime(),
+      size: 5 * 1024,
+    };
+
+    it('lists them under the settings of the project, in the Projets tab', async () => {
+      const backend = fakeBackend({ closed_projects: () => [OLD] });
+      render(SettingsModal, { tab: 'projects', projectId: 'p2' });
+      await screen.findByRole('heading', { name: 'Projets fermés' });
+      expect(group('Projets fermés').getByText('ancien')).toBeInTheDocument();
+      expect(backend.called('closed_projects')).toHaveLength(1);
+      const headings = within(panel())
+        .getAllByRole('heading')
+        .map((h) => h.textContent);
+      expect(headings.at(-2)).toBe('Zone sensible');
+      expect(headings.at(-1)).toBe('Projets fermés');
+      // Another tab of the project does not carry them.
+      await userEvent.click(tab('Kanban'));
+      expect(screen.queryByRole('heading', { name: 'Projets fermés' })).not.toBeInTheDocument();
+    });
+
+    it('lists them when no project is open, under what says so', async () => {
+      resetApp({ projects: [] });
+      fakeBackend({ closed_projects: () => [OLD] });
+      render(SettingsModal, { tab: 'projects' });
+      expect(screen.getByText('Aucun projet ouvert.')).toBeInTheDocument();
+      await screen.findByRole('heading', { name: 'Projets fermés' });
+      expect(group('Projets fermés').getByText('ancien')).toBeInTheDocument();
+      expect(group('Projets fermés').getByRole('button', { name: "Effacer l'historique…" })).toBeInTheDocument();
+      // The other tabs of a project still have nothing to show.
+      await userEvent.click(tab('Kanban'));
+      expect(screen.getByText('Aucun projet ouvert.')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Projets fermés' })).not.toBeInTheDocument();
+    });
+
+    it('shows no group when none was closed', async () => {
+      const backend = fakeBackend({ closed_projects: () => [] });
+      render(SettingsModal, { tab: 'projects', projectId: 'p2' });
+      await waitFor(() => expect(backend.called('closed_projects')).toHaveLength(1));
+      await new Promise((r) => setTimeout(r));
+      expect(screen.queryByRole('heading', { name: 'Projets fermés' })).not.toBeInTheDocument();
+    });
+  });
+
   it('checks for an update on demand', async () => {
-    fakeBackend();
+    const backend = fakeBackend({ update_check: () => ({ kind: 'none' }) });
     render(SettingsModal, { tab: 'about' });
     expect(screen.getByText('Escouade 1.3.1', { selector: '[role="tabpanel"] *' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Rechercher une mise à jour' }));
     await expect.poll(() => app.toasts.at(-1)?.text).toBe('Aucune mise à jour disponible.');
+    // Asked by the user: the backend is told, so that a failure is never kept quiet.
+    expect(backend.called('update_check').map((c) => c.args)).toEqual([{ manual: true }]);
+  });
+
+  it('tells why a check on demand failed, instead of saying there is nothing new', async () => {
+    fakeBackend({
+      update_check: () => ({ kind: 'failed', trouble: { message: '403 Forbidden de github.com', show: true, page: null } }),
+    });
+    render(SettingsModal, { tab: 'about' });
+    const button = screen.getByRole('button', { name: 'Rechercher une mise à jour' });
+    await userEvent.click(button);
+    await expect.poll(() => app.toasts.at(-1)?.text).toBe('Vérification des mises à jour impossible : 403 Forbidden de github.com');
+    // The check is over once its button is back.
+    await expect.poll(() => (button as HTMLButtonElement).disabled).toBe(false);
+    expect(app.toasts.map((t) => t.text)).toEqual(['Vérification des mises à jour impossible : 403 Forbidden de github.com']);
   });
 
   it('installs updates by itself unless told not to', async () => {
@@ -1022,6 +1126,20 @@ describe('SettingsModal in English', () => {
     expect(screen.getByRole('heading', { name: 'Processes' })).toBeInTheDocument();
   });
 
+  it('names the remote control setting for all agents in English', async () => {
+    const backend = backendSaving();
+    render(SettingsModal);
+    const remote = group('Remote control');
+    const all = remote.getByRole('switch', { name: 'Remote control for all agents' });
+    expect(all).toHaveAttribute('aria-checked', 'false');
+    expect(remote.getByText(/^Every agent of every project/)).toHaveTextContent(
+      'Every agent of every project, existing or new (ticket agents included), is reachable from claude.ai and the Claude app. Escouade starts each one’s claude process right away, and it stays running. The session appears on claude.ai as “project · agent” (for a ticket agent, the name comes from the ticket). In Claude Code view, an interface that is already open only picks it up at its next launch. To set an agent apart: right-click, “Turn off remote control”.',
+    );
+    await userEvent.click(all);
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(backend.called('save_settings')[0].args.settings).toMatchObject({ remoteControlAll: true });
+  });
+
   it('says of the executable path whether it is found, not whether the current account’s Claude Code is', async () => {
     fakeBackend();
     // An account with a `claude` of its own is the current one: Claude Code is found, the settings' path is not.
@@ -1139,7 +1257,7 @@ describe('SettingsModal in English', () => {
       within(panel())
         .getAllByRole('heading', { level: 3 })
         .map((h) => h.textContent),
-    ).toEqual(['Identity', 'Git', 'Worktrees', 'Launch', 'Danger zone']);
+    ).toEqual(['Identity', 'Remote control', 'Git', 'Worktrees', 'Launch', 'Danger zone']);
     expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('demo-api');
     expect(screen.getByRole('button', { name: 'Color 4' })).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'One worktree per agent' })).toBeInTheDocument();
@@ -1193,7 +1311,7 @@ describe('SettingsModal in English', () => {
   });
 
   it('tells the update check and the saved settings in English', async () => {
-    const backend = fakeBackend({ save_settings: () => [] });
+    const backend = fakeBackend({ save_settings: () => [], update_check: () => ({ kind: 'none' }) });
     render(SettingsModal, { tab: 'about' });
     await userEvent.click(screen.getByRole('button', { name: 'Check for updates' }));
     await expect.poll(() => app.toasts.at(-1)?.text).toBe('No update available.');

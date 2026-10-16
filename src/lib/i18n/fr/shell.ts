@@ -30,6 +30,15 @@ export default {
     worktreeDesc: 'Isole le travail de chaque agent et permet de voir ses fichiers modifiés séparément',
     create: 'Créer le projet',
     creating: 'Création…',
+    /** The folder was a project, closed with its history kept: adding it brings the history back. */
+    history: {
+      /** `{agents}`, `{tickets}`: the counts, each with its noun; `{date}`: its last activity. */
+      found: 'Historique retrouvé : {agents}, {tickets}, dernière activité le {date}',
+      fresh: "Partir d'un projet vierge",
+      freshDesc: "L'historique reste dans Réglages › Projets, où l'effacer.",
+      reopen: 'Rouvrir le projet',
+      reopening: 'Réouverture…',
+    },
     /** What is known of the folder chosen. */
     git: {
       choose: 'Choisis le dossier du projet',
@@ -61,9 +70,11 @@ export default {
     notReady: 'La mise à jour vers {version} n’est plus prête : Escouade te la proposera de nouveau une fois téléchargée.',
     installed: 'Escouade {version} est installée.',
     seeNotes: 'Voir les nouveautés',
-    /** `{error}`: what the updater answered, as received. */
+    /** `{error}`: the cause the backend gives, already in the language of the interface (or what the call answered, as received). */
     downloadFailed: 'Téléchargement de la mise à jour impossible : {error}',
     checkFailed: 'Vérification des mises à jour impossible : {error}',
+    /** The button of a failed download: the page of the release, where the installer can be taken from. */
+    openInBrowser: 'Télécharger dans le navigateur',
   },
   /** The question of the first start: the usage statistics (`telemetry`). */
   telemetry: {

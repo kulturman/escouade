@@ -8,7 +8,7 @@ use crate::i18n::{self, Lang};
 use crate::model::*;
 use crate::notify;
 use crate::paths::relative_slash;
-use crate::plan::{Change, PlanState};
+use crate::plan::{Change, PlanState, RunStatus};
 use crate::planfiles::{self, FileList};
 use crate::pricing::{self, Usage};
 use anyhow::{anyhow, bail, Result};
@@ -16,6 +16,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub mod sidechain;
 mod transcript;
 
 pub type AgentHandle = Arc<parking_lot::Mutex<AgentRt>>;
@@ -140,6 +141,16 @@ pub struct AgentRt {
     pub remote_state: Option<String>,
     /// The live process was linked to claude.ai (Remote Control).
     pub remote_linked: bool,
+    /// A link to claude.ai was tried on the live process (it worked, or the agent says why not).
+    pub remote_tried: bool,
+    /// Its interface closed right after it started with Remote Control (`tui::RC_GRACE`): the
+    /// ones that follow start without the option, until the app starts again or the user turns
+    /// Remote Control on by hand (not saved).
+    pub remote_fallback: bool,
+    /// The agent was told its Remote Control is unavailable, and nothing has worked since: it is
+    /// not told again at every start, until a link works or the user turns it on by hand (not
+    /// saved).
+    pub remote_told: bool,
     /// What the agent does now, from its latest tool, thinking or text (main thread only).
     pub activity: Option<String>,
     /// The plans it wrote (docs/superpowers/plans/*.md, as absolute paths), oldest first, five at
@@ -191,6 +202,12 @@ pub struct AgentRt {
     /// The entries of its transcript written before then (ms) are not read: the history of a
     /// session its interface resumed or forked with no read kept, which its view already has.
     pub(crate) tui_since: Option<i64>,
+    /// How its last interface ended, until the next one starts (not saved): the window starts it
+    /// again, or not, from this.
+    pub(crate) tui_exit: Option<TuiExit>,
+    /// How many of its interfaces in a row stopped soon after they started (not saved): an
+    /// automatic start is refused from the second on, so that one that cannot run does not loop.
+    pub(crate) tui_quick_exits: u32,
     /// Haiku was asked to name it since the app started (not saved): asked once, at the first
     /// message that gives a text to name it from (`naming_text`).
     pub(crate) naming_asked: bool,
@@ -206,14 +223,55 @@ pub struct AgentRt {
     pub(crate) escouade_next: bool,
 }
 
+/// A stream's process linked to claude.ai, and the session it holds there (its bridge id, when
+/// known).
+pub struct RemoteLink {
+    pub proc: Arc<ClaudeProcess>,
+    pub bridge: Option<String>,
+}
+
 /// Claude Code's interface running for an agent (`tui`).
 #[derive(Debug, Clone)]
 pub struct TuiRun {
     /// Its terminal.
     pub term_id: String,
+    /// The same, as the window is told of it.
+    pub info: crate::pty::TermInfo,
+    /// What the terminal printed, and the window that shows it: the terminal runs with none too
+    /// (Remote Control keeps the interface up).
+    pub output: Arc<crate::tui::TuiOutput>,
+    /// It was started with Remote Control (`--remote-control`): it has it whatever the agent's
+    /// setting says now, until its next start.
+    pub remote: bool,
+    /// When it started, as an instant: what the registry is waited for since (`REGISTRY_PATIENCE`),
+    /// and the quick close that Remote Control is taken for (`RC_GRACE`).
+    pub launched_at: std::time::Instant,
+    /// Its transcript has an entry that says it is up and how the link of its session to claude.ai
+    /// went (`bridge_status`, `bridge-session`), written since it started. See
+    /// `AgentRt::interface_ready`.
+    pub spoke: bool,
+    /// When the registry of Claude Code's sessions first listed it (`tui::find_registered`):
+    /// it is past its welcome screen and the box about the folder.
+    pub registered: Option<std::time::Instant>,
+    /// The file of the registry that lists it, once found: read again for its link.
+    pub registry_file: Option<std::path::PathBuf>,
+    /// The folder of that registry (`<the account's config folder>/sessions`).
+    pub sessions: std::path::PathBuf,
+    /// A sign was seen that its session is linked to claude.ai (a `bridge-session` entry, a
+    /// `bridge_status` with a link, the `bridgeSessionId` of the registry).
+    pub linked: bool,
+    /// Held while a message is typed in it, paste then Enter: two messages never mix.
+    pub typing: Arc<parking_lot::Mutex<()>>,
+    /// The user closed its terminal (`Core::kill_terminal`): its end is no failure to start.
+    pub killed: bool,
+    /// Remote Control ended while it ran a turn, and no window had shown it: it stops once the
+    /// turn is over, if it still has none.
+    pub stop_when_idle: bool,
     /// Which of the agent's interfaces it is: what the terminal's exit and the reads of the
     /// transcript check, so that an older one's are ignored.
     pub gen: u64,
+    /// When it started (ms): an exit soon after is a quick one (`tui::QUICK_EXIT`).
+    pub started: i64,
     /// The transcript it writes, once known, and how far it was read (bytes).
     pub transcript: Option<std::path::PathBuf>,
     pub offset: u64,
@@ -221,11 +279,48 @@ pub struct TuiRun {
     pub program: crate::claude::Program,
 }
 
+#[cfg(test)]
+impl TuiRun {
+    /// An interface that has said nothing yet, no window has shown (tests).
+    pub(crate) fn quiet(remote: bool) -> Self {
+        let info = crate::pty::TermInfo {
+            id: "term-1".into(),
+            project_id: String::new(),
+            name: "agent".into(),
+            shell: "claude".into(),
+        };
+        Self {
+            term_id: info.id.clone(),
+            info,
+            output: Arc::new(crate::tui::TuiOutput::new(None)),
+            remote,
+            launched_at: std::time::Instant::now(),
+            spoke: false,
+            registered: None,
+            registry_file: None,
+            sessions: std::path::PathBuf::new(),
+            linked: false,
+            typing: Arc::default(),
+            killed: false,
+            stop_when_idle: false,
+            gen: 1,
+            started: now_ms(),
+            transcript: None,
+            offset: 0,
+            program: crate::claude::Program::Native(std::path::PathBuf::new()),
+        }
+    }
+}
+
 const MAX_TEXT: usize = 8000;
 /// The plans of the plans folder an agent wrote that are remembered, and the calls waited for.
 const MAX_PLANS_WRITTEN: usize = 5;
 const MAX_PLAN_CALLS: usize = 64;
 const MAX_INPUT_STR: usize = 4000;
+/// A subagent's prompt (its « consigne ») is kept longer than another input's text.
+const MAX_PROMPT: usize = 16_000;
+/// The report a subagent hands back, kept with its call.
+const MAX_REPORT: usize = 16_000;
 const MAX_PATCH_LINES: usize = 800;
 
 /// `path` is in the folder where the superpowers skills keep what a plan's execution leaves
@@ -304,6 +399,10 @@ impl AgentRt {
         if let Some(plan) = meta.plan.as_mut() {
             plan.close_running(now_ms());
         }
+        // Saved before Remote Control had a source: the user turned it on for this agent.
+        if meta.remote_control && meta.remote_source.is_none() {
+            meta.remote_source = Some(RemoteSource::Hand);
+        }
         Self {
             conv: Conv::new(conv_dir, &meta.id),
             meta,
@@ -322,6 +421,9 @@ impl AgentRt {
             saw_init: false,
             remote_state: None,
             remote_linked: false,
+            remote_tried: false,
+            remote_fallback: false,
+            remote_told: false,
             activity: None,
             plan_written: Vec::new(),
             plan_calls: HashSet::new(),
@@ -344,6 +446,8 @@ impl AgentRt {
             tui_error: None,
             tui_prompt: None,
             tui_since: None,
+            tui_exit: None,
+            tui_quick_exits: 0,
             naming_asked: false,
             unprompted: None,
             without_escouade: false,
@@ -397,6 +501,8 @@ impl AgentRt {
             alive: self.proc.is_some() || self.tui.is_some(),
             escouade_next: self.escouade_next && (self.proc.is_some() || self.tui.is_some()),
             terminal_id: self.tui.as_ref().map(|t| t.term_id.clone()),
+            interface_remote: self.tui.as_ref().map(|t| t.remote),
+            tui_exit: self.tui_exit.clone(),
             pending: self.pending.iter().map(|p| p.item_id.clone()).collect(),
             requests: self.pending.iter().map(|p| p.view.clone()).collect(),
             context_tokens: self.context_tokens,
@@ -426,6 +532,7 @@ impl AgentRt {
         self.live.clear();
         self.remote_state = None;
         self.remote_linked = false;
+        self.remote_tried = false;
         self.forget_turn();
         self.saw_init = false;
         self.queued = 0;
@@ -438,11 +545,13 @@ impl AgentRt {
     /// Runs `f` on the agent's plan (made when it has none yet), keeps it only when it holds
     /// something, and tells what changed: a detail goes to the window, the rest is saved too.
     fn plan_apply(&mut self, fx: &mut Effects, f: impl FnOnce(&mut PlanState) -> Change) {
+        let before = ended_runs(self.meta.plan.as_ref());
         let mut plan = self.meta.plan.take().unwrap_or_default();
         let change = f(&mut plan);
         if !plan.is_empty() {
             self.meta.plan = Some(plan);
         }
+        self.keep_runs(&before, Some(fx));
         match change {
             Change::None => {}
             Change::View => fx.agent_changed = true,
@@ -456,10 +565,147 @@ impl AgentRt {
     /// The process is gone: what the plan has running is interrupted (the caller sends the view).
     fn interrupt_plan(&mut self) -> Change {
         let now = now_ms();
-        self.meta
+        let before = ended_runs(self.meta.plan.as_ref());
+        let change = self
+            .meta
             .plan
             .as_mut()
-            .map_or(Change::None, |plan| plan.close_running(now))
+            .map_or(Change::None, |plan| plan.close_running(now));
+        self.keep_runs(&before, None);
+        change
+    }
+
+    /// The subagents that ended since `before`, or whose totals came after their end: what the
+    /// window shows of each once the plan has forgotten its row (30 at most, none after a reset)
+    /// is kept on the item of its call (`run`), in the conversation and its log. Without `fx`
+    /// (the process is gone, no frame to answer), it is only written down: the window, which has
+    /// the plan's row meanwhile, reads it with the conversation.
+    fn keep_runs(&mut self, before: &[EndedRun], mut fx: Option<&mut Effects>) {
+        for run in ended_runs(self.meta.plan.as_ref()) {
+            if before.contains(&run) || !self.conv.contains(&run.id) {
+                continue;
+            }
+            let op = ConvOp::Patch {
+                id: run.id.clone(),
+                patch: json!({ "run": run.summary() }),
+            };
+            match fx.as_deref_mut() {
+                Some(fx) => self.push(op, fx),
+                None => self.conv.apply(&op),
+            }
+        }
+    }
+
+    /// The report a subagent hands back, kept on the item of its call (`report`): the
+    /// `handback_report` of its task's notification, else, for a subagent that ended without
+    /// `SubagentHandback` (no `handback` at all), its final text, which is then the `summary`
+    /// (measured on Claude Code 2.1.300). A `summary` beside a `handback` only says where the
+    /// report went, one of a task stopped or failed is its description, and the generic line of
+    /// older versions (`Agent "…" finished`) only says that it ended: none is a report (for a
+    /// subagent in the foreground, the result of its call is, and the window reads it there).
+    fn keep_report(&mut self, f: &Value, fx: &mut Effects) {
+        let handed = f["handback_report"]["text"].as_str();
+        let summary = (f["handback"].is_null() && f["status"] == "completed")
+            .then(|| f["summary"].as_str())
+            .flatten()
+            .filter(|s| !is_generic_summary(s));
+        let Some(text) = handed.or(summary).filter(|t| !t.trim().is_empty()) else {
+            return;
+        };
+        let task = f["task_id"].as_str();
+        let row = self.meta.plan.as_ref().and_then(|p| {
+            p.agents
+                .iter()
+                .find(|a| task.is_some() && a.task_id.as_deref() == task)
+                .map(|a| a.id.clone())
+        });
+        let Some(call) = row.or_else(|| f["tool_use_id"].as_str().map(str::to_string)) else {
+            return;
+        };
+        self.set_report(&call, text, false, fx);
+    }
+
+    /// `text` as the report on the item of the subagent call `call` (cut to `MAX_REPORT`), if that
+    /// is one; with `only_missing`, if it has none yet.
+    fn set_report(&mut self, call: &str, text: &str, only_missing: bool, fx: &mut Effects) {
+        let Some(item) = self.conv.get(call) else {
+            return;
+        };
+        let is_call =
+            item["kind"] == "tool" && matches!(item["name"].as_str(), Some("Task" | "Agent"));
+        let has_one = item["report"]
+            .as_str()
+            .is_some_and(|r| !r.trim().is_empty());
+        if is_call && !(only_missing && has_one) {
+            self.patch(call, json!({ "report": truncate(text, MAX_REPORT) }), fx);
+        }
+    }
+
+    /// A background subagent's end as the Claude Code view tells it: there, no `system` frame says a
+    /// task ended, only the notification Claude Code passes on to Claude (`origin.kind`
+    /// `task-notification`, replayed). Applied to the plan as the frame would be, so that the row
+    /// ends (`completed`, `failed`, `stopped` or `killed`). Its words are no report (the real
+    /// frame, in the stream, has the report beside them; a replay's `summary` often only says where
+    /// the report went), and a row that ended already stays as it was.
+    fn end_replayed_task(&mut self, text: &str, fx: &mut Effects) {
+        let frame = json!({
+            "type": "system", "subtype": "task_notification", "task_id": tag(text, "task-id"),
+            "tool_use_id": tag(text, "tool-use-id"), "status": tag(text, "status"),
+        });
+        self.plan_apply(fx, |plan| plan.on_system(&frame, now_ms()));
+    }
+
+    /// The report in a subagent's hand-back message (`origin.kind` `peer`, replayed), for the call of
+    /// the row whose task sent it, if that call has none yet: in the Claude Code view, nothing else
+    /// carries it.
+    fn keep_handback(&mut self, text: &str, origin: Option<&str>, fx: &mut Effects) {
+        let Some((from, report)) = handback_report(text) else {
+            return;
+        };
+        let Some(task) = from.or(origin) else {
+            return;
+        };
+        let call = self.meta.plan.as_ref().and_then(|p| {
+            p.agents
+                .iter()
+                .find(|a| a.task_id.as_deref() == Some(task))
+                .map(|a| a.id.clone())
+        });
+        if let Some(call) = call {
+            self.set_report(&call, &report, true, fx);
+            // And its end: in the interface's transcript, no notification of a subagent's task is
+            // replayed (Claude Code 2.1.283), its hand-back is all there is. A row that ended
+            // already (the stream's frame came first) stays as it was.
+            let frame = json!({
+                "type": "system", "subtype": "task_notification", "task_id": task,
+                "tool_use_id": call, "status": "completed",
+            });
+            self.plan_apply(fx, |plan| plan.on_system(&frame, now_ms()));
+        }
+    }
+
+    /// The subagent a request of Claude Code's comes from (the call that launched it): the one
+    /// whose task `agent_id` names (Claude Code 2.1.300), else the one whose thread made the call
+    /// that asks.
+    fn subagent_of(&mut self, req: &Value) -> Option<String> {
+        if let Some(task) = req["agent_id"].as_str() {
+            let row = self.meta.plan.as_ref().and_then(|p| {
+                p.agents
+                    .iter()
+                    .find(|a| a.task_id.as_deref() == Some(task))
+                    .map(|a| a.id.clone())
+            });
+            if row.is_some() {
+                return row;
+            }
+        }
+        // Only a subagent's call: a thread that is no subagent's (a workflow's agent) names none.
+        let call = req["tool_use_id"].as_str()?;
+        let parent = self.conv.get(call)?["parent"].as_str()?.to_string();
+        let launched = self.conv.get(&parent).is_some_and(|i| {
+            i["kind"] == "tool" && matches!(i["name"].as_str(), Some("Task" | "Agent"))
+        });
+        launched.then_some(parent)
     }
 
     /// A new plan: what the last forgets, and the files it will read are those touched from now on.
@@ -623,7 +869,58 @@ impl AgentRt {
         self.interrupt_plan();
         let p = self.proc.take()?;
         self.gen += 1;
+        // Its exit is ignored from now on, so the link it held is dropped here.
+        self.remote_state = None;
+        self.remote_linked = false;
+        self.remote_tried = false;
         Some(p)
+    }
+
+    /// Remote Control ends for the agent: no longer in force, its remote session forgotten. The
+    /// live process, when it was linked, is given back with the session to close (`end_link`).
+    pub fn end_remote(&mut self) -> Option<RemoteLink> {
+        self.meta.remote_control = false;
+        self.meta.remote_source = None;
+        self.end_link()
+    }
+
+    /// The link of the live process to claude.ai ends; Remote Control stays in force for the
+    /// agent (its interface will hold its own). The process, when it was linked, is given back
+    /// with the session it held: closing it is up to the caller (`Core::close_link`). The
+    /// session's id is kept (`meta.remote_session`) until a closing has worked
+    /// (`forget_remote_session`): with no live linked process (just started, a link that failed,
+    /// a process gone) nothing can close it now, and the agent's next process does.
+    pub fn end_link(&mut self) -> Option<RemoteLink> {
+        let bridge = self.meta.remote_session.clone();
+        self.meta.remote_url = None;
+        // In the Claude Code view the state is the interface's, which keeps its link until its
+        // next launch.
+        if !self.meta.terminal {
+            self.remote_state = None;
+        }
+        // A link to claude.ai is to be tried again when it comes back.
+        self.remote_tried = false;
+        let linked = std::mem::take(&mut self.remote_linked);
+        self.proc
+            .clone()
+            .filter(|_| linked)
+            .map(|proc| RemoteLink { proc, bridge })
+    }
+
+    /// The remote session `bridge` is closed on claude.ai: the agent no longer holds it, unless
+    /// it holds another one meanwhile.
+    pub fn forget_remote_session(&mut self, bridge: Option<&str>) {
+        if self.meta.remote_session.as_deref() == bridge {
+            self.meta.remote_session = None;
+        }
+    }
+
+    /// Tells the agent its Remote Control is unavailable, unless it was told already and nothing
+    /// has worked since (`remote_told`).
+    pub fn remote_unavailable_notice(&mut self, text: String, fx: &mut Effects) {
+        if !std::mem::replace(&mut self.remote_told, true) {
+            self.notice("warn", text, fx);
+        }
     }
 
     pub fn clear_pending(&mut self, fx: &mut Effects) {
@@ -635,7 +932,7 @@ impl AgentRt {
 
     /// Closes what a turn left open: partial text is kept (and persisted, deltas being
     /// memory-only), tools that never returned are marked interrupted.
-    fn close_open_items(&mut self, fx: &mut Effects) {
+    pub(crate) fn close_open_items(&mut self, fx: &mut Effects) {
         for (id, text) in self.conv.open_items() {
             let patch = match text {
                 Some(text) => json!({ "text": text, "streaming": false }),
@@ -811,6 +1108,7 @@ impl AgentRt {
         self.live.clear();
         self.remote_state = None;
         self.remote_linked = false;
+        self.remote_tried = false;
         self.forget_turn();
         self.plan_apply(fx, |plan| plan.close_running(now_ms()));
         self.clear_pending(fx);
@@ -825,11 +1123,8 @@ impl AgentRt {
         let lost = if self.saw_init || resume_failed {
             None
         } else if stderr.contains("No conversation found") {
-            self.meta.session_id = None;
-            self.meta.last_entry = None;
             // A copy whose original's session is gone: the same, a new session.
-            self.meta.fork_of = None;
-            self.meta.fork_at = None;
+            self.forget_session();
             Some(session_lost)
         } else if self.meta.fork_at.is_some()
             && stderr.contains("No message found with message.uuid")
@@ -972,6 +1267,7 @@ impl AgentRt {
                 let Some(id) = f["task_id"].as_str() else {
                     return;
                 };
+                self.keep_report(f, fx);
                 if self.foreground_tasks.remove(id) {
                     return;
                 }
@@ -1214,7 +1510,9 @@ impl AgentRt {
                     self.patch(&id, json!({ "text": text, "streaming": false }), fx)
                 }
                 ("tool", Some(id)) => {
-                    self.patch(&id, json!({ "input": trim_strings(&block["input"]) }), fx)
+                    let name = block["name"].as_str().unwrap_or_default();
+                    let input = item_input(name, &block["input"]);
+                    self.patch(&id, json!({ "input": input }), fx)
                 }
                 (_, None) => {
                     let n = self.blocks.get(&mid).map_or(0, Vec::len);
@@ -1226,7 +1524,8 @@ impl AgentRt {
                             json!({ "kind": "thinking", "id": format!("{mid}:a{n}"), "text": block["thinking"].as_str().unwrap_or(""), "parent": parent, "streaming": false })
                         }
                         _ => json!({
-                            "kind": "tool", "id": block["id"], "name": block["name"], "input": trim_strings(&block["input"]),
+                            "kind": "tool", "id": block["id"], "name": block["name"],
+                            "input": item_input(block["name"].as_str().unwrap_or_default(), &block["input"]),
                             "status": "running", "parent": parent, "ts": now_ms(),
                         }),
                     };
@@ -1363,16 +1662,17 @@ impl AgentRt {
                 return;
             }
             if kind == Some("task-notification") {
-                let task = text
-                    .split_once("<task-id>")
-                    .and_then(|(_, rest)| rest.split_once("</task-id>"))
-                    .map(|(id, _)| id.trim().to_string());
+                self.end_replayed_task(&text, fx);
+                let task = tag(&text, "task-id").map(str::to_string);
                 if let Some(n) = task.and_then(|t| self.announced_tasks.get_mut(&t)) {
                     if *n > 0 {
                         *n -= 1;
                         return;
                     }
                 }
+            }
+            if kind == Some("peer") {
+                self.keep_handback(&text, f["origin"]["from"].as_str(), fx);
             }
             let source = match kind {
                 Some("task-notification") => "task",
@@ -1436,31 +1736,13 @@ impl AgentRt {
             if self.plan_removals.remove(id) && !is_error {
                 self.plan_apply(fx, PlanState::finish_files);
             }
-            let mut text = tool_result_text(&b["content"]);
+            let text = tool_result_text(&b["content"]);
             self.plan_apply(fx, |plan| {
                 plan.on_tool_result(id, is_error, &text, tur, now_ms())
             });
-            let mut result = json!({ "isError": is_error });
-            if let Some(stdout) = tur["stdout"].as_str() {
-                text = stdout.to_string();
-                if let Some(stderr) = tur["stderr"].as_str().filter(|s| !s.is_empty()) {
-                    text = format!("{text}\n{stderr}");
-                }
-            }
-            result["text"] = Value::String(truncate(text.trim_end(), MAX_TEXT));
-            if let Some(hunks) = tur["structuredPatch"].as_array() {
-                let (add, del, patch) = if hunks.is_empty() && tur["type"] == "create" {
-                    created_file_patch(tur["content"].as_str().unwrap_or(""))
-                } else {
-                    summarize_patch(hunks)
-                };
-                result["add"] = add.into();
-                result["del"] = del.into();
-                result["patch"] = patch;
-                if let Some(path) = tur["filePath"].as_str() {
-                    result["filePath"] = path.into();
-                    self.touch(path, fx);
-                }
+            let result = tool_result(text, is_error, tur);
+            if let Some(path) = result["filePath"].as_str() {
+                self.touch(path, fx);
             }
             self.patch(
                 id,
@@ -1710,6 +1992,11 @@ impl AgentRt {
                         "decision": null, "ts": now_ms(),
                     })
                 };
+                let mut item = item;
+                if let Some(sub) = self.subagent_of(req) {
+                    // Shown in the agent's conversation still (no `parent`), and in its subagent's.
+                    item["sub"] = sub.into();
+                }
                 self.append(item, fx);
                 let view = pending_view(rid, &tool, req, &input, &self.meta.cwd);
                 self.add_pending(PendingReq {
@@ -1762,6 +2049,62 @@ pub fn parse_rate_event(info: &Value) -> (Option<RateWindow>, Option<RateWindow>
     (parse("five_hour"), parse("seven_day"))
 }
 
+/// What is between `<name>` and `</name>` in `text` (the tags of a notification), trimmed; None when
+/// there is none or nothing in it.
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let (_, rest) = text.split_once(&format!("<{name}>"))?;
+    let (inner, _) = rest.split_once(&format!("</{name}>"))?;
+    Some(inner.trim()).filter(|s| !s.is_empty())
+}
+
+/// The line an older Claude Code, and the fake `claude`, give as the `summary` of a subagent's
+/// notification: `Agent "<title>" finished` (or `completed`, `failed`, `stopped`), with or without a
+/// final dot. It only says that the subagent ended: it is no report.
+fn is_generic_summary(summary: &str) -> bool {
+    let line = summary.trim();
+    let line = line.strip_suffix('.').unwrap_or(line);
+    if line.contains(['\n', '\r']) {
+        return false;
+    }
+    let Some(rest) = line.strip_prefix("Agent \"") else {
+        return false;
+    };
+    ["finished", "completed", "failed", "stopped"]
+        .iter()
+        .any(|word| {
+            rest.strip_suffix(word)
+                .is_some_and(|title| title.ends_with("\" "))
+        })
+}
+
+/// The report in a subagent's hand-back message, and who sent it (the `from` of its frame): the
+/// text that follows « The report follows: », without the indent Claude Code gives it. None for any
+/// other message.
+fn handback_report(text: &str) -> Option<(Option<&str>, String)> {
+    let open = text.find("<agent-message")?;
+    let start = open + text[open..].find('>')? + 1;
+    let from = text[open..start]
+        .split_once("from=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(from, _)| from);
+    // The last closing tag: a report may quote the tag itself.
+    let body = match text.rfind("</agent-message>") {
+        Some(close) if close > start => &text[start..close],
+        _ => &text[start..],
+    };
+    if !body.contains("[Subagent hand-back]") {
+        return None;
+    }
+    let (_, report) = body.split_once("The report follows:")?;
+    let report: Vec<&str> = report
+        .lines()
+        .map(|l| l.strip_prefix("  ").unwrap_or(l))
+        .collect();
+    let report = report.join("\n");
+    let report = report.trim();
+    (!report.is_empty()).then(|| (from, report.to_string()))
+}
+
 fn tool_result_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
@@ -1772,6 +2115,34 @@ fn tool_result_text(content: &Value) -> String {
             .join("\n"),
         _ => String::new(),
     }
+}
+
+/// The `result` of a tool's item: `text`, the words of its result block, but a command's own
+/// output when the structured result (`tool_use_result` in the stream, `toolUseResult` in a
+/// transcript) has it, cut to `MAX_TEXT`; for a file it changed, the lines of its diff and its path.
+fn tool_result(mut text: String, is_error: bool, tur: &Value) -> Value {
+    let mut result = json!({ "isError": is_error });
+    if let Some(stdout) = tur["stdout"].as_str() {
+        text = stdout.to_string();
+        if let Some(stderr) = tur["stderr"].as_str().filter(|s| !s.is_empty()) {
+            text = format!("{text}\n{stderr}");
+        }
+    }
+    result["text"] = Value::String(truncate(text.trim_end(), MAX_TEXT));
+    if let Some(hunks) = tur["structuredPatch"].as_array() {
+        let (add, del, patch) = if hunks.is_empty() && tur["type"] == "create" {
+            created_file_patch(tur["content"].as_str().unwrap_or(""))
+        } else {
+            summarize_patch(hunks)
+        };
+        result["add"] = add.into();
+        result["del"] = del.into();
+        result["patch"] = patch;
+        if let Some(path) = tur["filePath"].as_str() {
+            result["filePath"] = path.into();
+        }
+    }
+    result
 }
 
 fn summarize_patch(hunks: &[Value]) -> (u32, u32, Value) {
@@ -1813,6 +2184,62 @@ fn created_file_patch(content: &str) -> (u32, u32, Value) {
         0,
         json!([{ "oldStart": 0, "newStart": 1, "lines": kept }]),
     )
+}
+
+/// A tool call's input, as its item keeps it: each text cut to `MAX_INPUT_STR`, but a subagent's
+/// prompt (`Task` / `Agent`), its view's « consigne », to `MAX_PROMPT`.
+fn item_input(name: &str, input: &Value) -> Value {
+    let mut kept = trim_strings(input);
+    if matches!(name, "Task" | "Agent") {
+        if let Some(prompt) = input["prompt"].as_str() {
+            kept["prompt"] = Value::String(truncate(prompt, MAX_PROMPT));
+        }
+    }
+    kept
+}
+
+/// What `keep_runs` compares of an ended subagent.
+#[derive(Debug, Clone, PartialEq)]
+struct EndedRun {
+    id: String,
+    status: RunStatus,
+    tokens: Option<u64>,
+    tools: u32,
+    started_at: i64,
+    ended_at: Option<i64>,
+}
+
+impl EndedRun {
+    /// The `run` of its call's item.
+    fn summary(&self) -> Value {
+        let mut run = json!({
+            "status": self.status, "tools": self.tools, "startedAt": self.started_at,
+            "endedAt": self.ended_at,
+        });
+        if let Some(tokens) = self.tokens {
+            run["tokens"] = tokens.into();
+        }
+        run
+    }
+}
+
+/// The subagents of `plan` that ended.
+fn ended_runs(plan: Option<&PlanState>) -> Vec<EndedRun> {
+    plan.map(|p| {
+        p.agents
+            .iter()
+            .filter(|a| a.status != RunStatus::Running)
+            .map(|a| EndedRun {
+                id: a.id.clone(),
+                status: a.status,
+                tokens: a.tokens,
+                tools: a.tools,
+                started_at: a.started_at,
+                ended_at: a.ended_at,
+            })
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Truncates long strings inside tool inputs (file contents, big edits) before they reach the UI.
@@ -3821,7 +4248,7 @@ npm test")
 
     // ---------- the plan ----------
 
-    use crate::plan::{RunStatus, TaskStatus};
+    use crate::plan::TaskStatus;
 
     /// The assistant calls `name` (in the thread of the subagent `parent`, or the main one).
     fn call(a: &mut AgentRt, parent: Option<&str>, id: &str, name: &str, input: Value) -> Effects {
@@ -4036,6 +4463,542 @@ npm test")
         assert!(fx.save);
         // The event row of the conversation is still made.
         assert_eq!(a.conv.get("n1").unwrap()["source"], "task");
+    }
+
+    /// A subagent `a1` in the background, its task `bg1` started.
+    fn background_subagent(a: &mut AgentRt) {
+        call(
+            a,
+            None,
+            "a1",
+            "Agent",
+            json!({"description":"Tests","subagent_type":"general-purpose","model":"haiku","prompt":"Lance les tests"}),
+        );
+        system(
+            a,
+            json!({"type":"system","subtype":"task_started","task_id":"bg1","tool_use_id":"a1",
+                "description":"Tests","task_type":"local_agent","is_backgrounded":true}),
+        );
+        returns(
+            a,
+            "a1",
+            "Async agent launched successfully.\nagentId: bg1",
+            json!({"status":"async_launched","agentId":"bg1"}),
+        );
+    }
+
+    #[test]
+    fn a_request_a_subagent_makes_names_it_and_stays_in_the_agents_conversation() {
+        let mut a = rt();
+        background_subagent(&mut a);
+        call(
+            &mut a,
+            Some("a1"),
+            "k1",
+            "Write",
+            json!({"file_path":"C:/p/x.txt","content":"x"}),
+        );
+        // As Claude Code 2.1.300 asks it (measured): `agent_id` is the subagent's task.
+        let mut fx = Effects::default();
+        a.handle_frame(
+            &json!({"type":"control_request","request_id":"r1","request":{
+                "subtype":"can_use_tool","tool_name":"Write","tool_use_id":"k1","agent_id":"bg1",
+                "input":{"file_path":"C:/p/x.txt","content":"x"}}}),
+            &mut fx,
+        );
+        let item = a.conv.get("r1").unwrap().clone();
+        assert_eq!(item["sub"], "a1");
+        assert!(
+            item["parent"].is_null(),
+            "shown in the agent's conversation too"
+        );
+        // Without `agent_id`, the thread of the call that asks tells it.
+        call(
+            &mut a,
+            Some("a1"),
+            "k2",
+            "Bash",
+            json!({"command":"npm test"}),
+        );
+        a.handle_frame(
+            &json!({"type":"control_request","request_id":"r2","request":{
+                "subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"k2","input":{"command":"npm test"}}}),
+            &mut fx,
+        );
+        assert_eq!(a.conv.get("r2").unwrap()["sub"], "a1");
+        // A question of the main thread is nobody's.
+        a.handle_frame(
+            &json!({"type":"control_request","request_id":"r3","request":{
+                "subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"q1",
+                "input":{"questions":[{"question":"Q ?","options":[]}]}}}),
+            &mut fx,
+        );
+        assert!(a.conv.get("r3").unwrap().get("sub").is_none());
+        // Nor is a request of a thread that is no subagent's (a workflow's agent).
+        call(&mut a, Some("w1"), "k3", "Bash", json!({"command":"ls"}));
+        a.handle_frame(
+            &json!({"type":"control_request","request_id":"r4","request":{
+                "subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"k3","input":{"command":"ls"}}}),
+            &mut fx,
+        );
+        assert!(a.conv.get("r4").unwrap().get("sub").is_none());
+    }
+
+    #[test]
+    fn the_report_and_the_totals_of_a_subagent_stay_with_its_call_in_the_conversation() {
+        let mut a = rt();
+        background_subagent(&mut a);
+        assert!(a.conv.get("a1").unwrap().get("run").is_none());
+        let report = "Status: DONE\nTous les tests passent.";
+        let fx = system(
+            &mut a,
+            json!({"type":"system","subtype":"task_notification","task_id":"bg1","tool_use_id":"a1",
+                "status":"completed","summary":"This agent's report was delivered to you…","uuid":"n1",
+                "usage":{"total_tokens":700,"tool_uses":4,"duration_ms":10},
+                "handback":"send","handback_report":{"text":report}}),
+        );
+        let item = a.conv.get("a1").unwrap().clone();
+        assert_eq!(item["report"], report);
+        let row = plan(&a).agents[0].clone();
+        assert_eq!(
+            item["run"],
+            json!({"status":"done","tokens":700,"tools":4,"startedAt":row.started_at,"endedAt":row.ended_at})
+        );
+        // The window hears of it, the log keeps it.
+        assert!(fx
+            .ops
+            .iter()
+            .any(|op| matches!(op, ConvOp::Patch { id, patch } if id == "a1" && patch.get("run").is_some())));
+        let log = crate::conv::replay(&crate::conv::log_path(
+            &std::env::temp_dir().join(format!("ccm-agent-tests-{}", std::process::id())),
+            &a.meta.id,
+        ))
+        .unwrap();
+        let kept = &log.items[log.index["a1"]];
+        assert_eq!(kept["report"], report);
+        assert_eq!(kept["run"]["status"], "done");
+
+        // In the foreground, its result ends it; a process gone interrupts one still running.
+        call(
+            &mut a,
+            None,
+            "a2",
+            "Agent",
+            json!({"description":"Lire","prompt":"Lis"}),
+        );
+        returns(
+            &mut a,
+            "a2",
+            "Trouvé",
+            json!({"status":"completed","agentId":"x","totalToolUseCount":3,"totalDurationMs":1500,"totalTokens":900}),
+        );
+        assert_eq!(a.conv.get("a2").unwrap()["run"]["tokens"], 900);
+        assert_eq!(a.conv.get("a2").unwrap()["run"]["status"], "done");
+        call(
+            &mut a,
+            None,
+            "a3",
+            "Agent",
+            json!({"description":"Attendre","prompt":"Attends"}),
+        );
+        a.detach();
+        assert_eq!(a.conv.get("a3").unwrap()["run"]["status"], "interrupted");
+        // A call that is no subagent's never gets one.
+        call(&mut a, None, "b1", "Bash", json!({"command":"ls"}));
+        returns(&mut a, "b1", "ok", json!({"stdout":"ok","stderr":""}));
+        a.detach();
+        assert!(a.conv.get("b1").unwrap().get("run").is_none());
+    }
+
+    #[test]
+    fn a_subagents_prompt_is_kept_longer_than_another_input_but_bounded() {
+        let mut a = rt();
+        let long = "é".repeat(5_000);
+        call(
+            &mut a,
+            None,
+            "a1",
+            "Agent",
+            json!({"description":"Tests","prompt":long,"other":long}),
+        );
+        let input = a.conv.get("a1").unwrap()["input"].clone();
+        assert_eq!(input["prompt"], long, "10 000 bytes: whole");
+        assert!(input["other"].as_str().unwrap().len() < 4_100);
+        let longer = "x".repeat(40_000);
+        call(&mut a, None, "a2", "Task", json!({"prompt":longer}));
+        let kept = a.conv.get("a2").unwrap()["input"]["prompt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(kept.len() < 16_100 && kept.len() > 15_000 && kept.ends_with('…'));
+        // Another tool's long text is cut as before.
+        call(&mut a, None, "b1", "Bash", json!({"command":longer}));
+        assert!(
+            a.conv.get("b1").unwrap()["input"]["command"]
+                .as_str()
+                .unwrap()
+                .len()
+                < 4_100
+        );
+    }
+
+    /// What Claude Code 2.1.300 wrote on stdout when a subagent was stopped by `stop_task` (an
+    /// essay of the host's requests on a real run, docs/PROTOCOL.md).
+    const REAL_STOP: &str = include_str!("../../tests/fixtures/real-run-stop-task.jsonl");
+
+    /// What Claude Code 2.1.300 wrote on stdout while the agent passed a message on to its
+    /// subagent with `SendMessage` (« Lui écrire », docs/PROTOCOL.md): the subagent ended with no
+    /// `SubagentHandback`, its report in the `summary` of its notification.
+    const REAL_SEND: &str = include_str!("../../tests/fixtures/real-run-send-message.jsonl");
+
+    #[test]
+    fn a_report_handed_back_without_subagent_handback_is_the_summary_of_its_notification() {
+        let mut a = rt();
+        replay(&mut a, REAL_SEND);
+        let p = plan(&a);
+        assert_eq!(p.agents.len(), 1);
+        let row = &p.agents[0];
+        assert_eq!(row.status, RunStatus::Done);
+        let call = a.conv.get(&row.id).unwrap().clone();
+        let report = call["report"].as_str().expect("its report");
+        assert!(report.contains("The secret word is BANANA."), "{report}");
+        // The message reached it through the agent's own SendMessage, to its task.
+        let sent = a
+            .conv
+            .items()
+            .into_iter()
+            .find(|i| i["kind"] == "tool" && i["name"] == "SendMessage")
+            .expect("the agent's SendMessage");
+        assert_eq!(sent["input"]["to"], row.task_id.as_deref().unwrap());
+        assert!(sent["parent"].is_null());
+    }
+
+    #[test]
+    fn the_summary_of_a_notification_is_no_report_when_the_report_went_elsewhere_or_it_stopped() {
+        for (extra, status) in [
+            (json!({"handback": "send"}), "completed"),
+            (json!({}), "stopped"),
+            (json!({}), "failed"),
+        ] {
+            let mut a = rt();
+            background_subagent(&mut a);
+            let mut f = json!({"type":"system","subtype":"task_notification","task_id":"bg1",
+                "tool_use_id":"a1","status":status,"summary":"This agent's report was delivered to you…"});
+            for (k, v) in extra.as_object().unwrap() {
+                f[k] = v.clone();
+            }
+            system(&mut a, f);
+            assert!(
+                a.conv.get("a1").unwrap().get("report").is_none(),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_generic_line_of_an_older_summary_is_no_report_but_a_text_is() {
+        // Older versions of Claude Code, and the fake `claude`, only say that the subagent ended.
+        for summary in [
+            "Agent \"Tests\" finished",
+            "Agent \"Tests\" completed",
+            "Agent \"Tests\" failed",
+            "Agent \"Tests\" stopped",
+            "Agent \"Tests\" finished.",
+            "Agent \"Lire \"a.ts\" et \"b.ts\"\" completed",
+            "Agent \"\" finished",
+            "  Agent \"Surveiller la suite de tests\" completed \n",
+        ] {
+            let mut a = rt();
+            background_subagent(&mut a);
+            system(
+                &mut a,
+                json!({"type":"system","subtype":"task_notification","task_id":"bg1","tool_use_id":"a1",
+                    "status":"completed","summary":summary,"uuid":"n1"}),
+            );
+            assert!(
+                a.conv.get("a1").unwrap().get("report").is_none(),
+                "{summary:?}"
+            );
+        }
+        // Anything else is the subagent's own text, even when it starts the same way.
+        for summary in [
+            "Tous les tests passent.",
+            "Agent \"Tests\" finished: 12 tests pass.",
+            "Agent \"Tests\" finished\nAll 12 tests pass.",
+            "Agent \"Tests\" ended",
+            "Agent Tests finished",
+            "The agent \"Tests\" finished",
+            "Agent \"Tests\" finished..",
+        ] {
+            let mut a = rt();
+            background_subagent(&mut a);
+            system(
+                &mut a,
+                json!({"type":"system","subtype":"task_notification","task_id":"bg1","tool_use_id":"a1",
+                    "status":"completed","summary":summary,"uuid":"n1"}),
+            );
+            assert_eq!(a.conv.get("a1").unwrap()["report"], summary, "{summary:?}");
+        }
+    }
+
+    /// A subagent `a1` launched in the background as the Claude Code view's transcript tells it
+    /// (no `system` frame there): its call, and the result that gives its task `bg1`.
+    fn launched_in_the_transcript(a: &mut AgentRt) {
+        let mut fx = Effects::default();
+        a.on_transcript(
+            &json!({"type":"assistant","uuid":"e1","message":{"id":"m1","content":[{"type":"tool_use","id":"a1","name":"Agent",
+                "input":{"description":"Tests","prompt":"Lance les tests","run_in_background":true}}]}}),
+            &mut fx,
+        );
+        a.on_transcript(
+            &json!({"type":"user","uuid":"e2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a1",
+                "content":"Async agent launched successfully.\nagentId: bg1"}]},
+                "toolUseResult":{"status":"async_launched","agentId":"bg1"}}),
+            &mut fx,
+        );
+    }
+
+    /// The notification of a task as Claude Code writes it for Claude.
+    fn notification(task: &str, call: &str, status: &str) -> String {
+        format!("<task-notification>\n<task-id>{task}</task-id>\n<tool-use-id>{call}</tool-use-id>\n<output-file>C:\\Temp\\{task}.output</output-file>\n<status>{status}</status>\n<summary>Agent \"Tests\" finished</summary>\n</task-notification>")
+    }
+
+    #[test]
+    fn in_the_claude_code_view_the_replayed_notification_of_a_background_subagent_ends_its_row() {
+        for (status, ended) in [
+            ("completed", RunStatus::Done),
+            ("failed", RunStatus::Failed),
+            ("killed", RunStatus::Stopped),
+            ("stopped", RunStatus::Stopped),
+        ] {
+            let mut a = rt();
+            launched_in_the_transcript(&mut a);
+            assert_eq!(plan(&a).agents[0].status, RunStatus::Running, "{status}");
+            let mut fx = Effects::default();
+            a.on_transcript(
+                &json!({"type":"user","uuid":"n1","origin":{"kind":"task-notification"},
+                    "message":{"role":"user","content":notification("bg1", "a1", status)}}),
+                &mut fx,
+            );
+            let row = plan(&a).agents[0].clone();
+            assert_eq!(row.status, ended, "{status}");
+            assert!(
+                row.ended_at.is_some() && fx.save && fx.agent_changed,
+                "{status}"
+            );
+            // Said on its call, and still told in the conversation.
+            assert_eq!(a.conv.get("a1").unwrap()["run"]["status"], json!(ended));
+            assert_eq!(a.conv.get("n1").unwrap()["source"], "task");
+            // No report made of a notification's words.
+            assert!(
+                a.conv.get("a1").unwrap().get("report").is_none(),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_replayed_notification_of_a_task_no_row_has_changes_no_plan() {
+        let mut a = rt();
+        launched_in_the_transcript(&mut a);
+        let before = plan(&a).agents;
+        a.on_transcript(
+            &json!({"type":"user","uuid":"n1","origin":{"kind":"task-notification"},
+                "message":{"role":"user","content":notification("bash9", "toolu_bash", "completed")}}),
+            &mut Effects::default(),
+        );
+        assert_eq!(plan(&a).agents, before);
+    }
+
+    #[test]
+    fn in_the_stream_the_replay_of_a_notification_changes_nothing_of_a_row_that_ended() {
+        let mut a = rt();
+        background_subagent(&mut a);
+        let report = "Status: DONE\nTous les tests passent.";
+        system(
+            &mut a,
+            json!({"type":"system","subtype":"task_notification","task_id":"bg1","tool_use_id":"a1",
+                "status":"completed","summary":"This agent's report was delivered to you…","uuid":"n1",
+                "usage":{"total_tokens":700,"tool_uses":4,"duration_ms":10},
+                "handback":"send","handback_report":{"text":report}}),
+        );
+        let ended = plan(&a).agents[0].clone();
+        assert_eq!(ended.status, RunStatus::Done);
+        // Mid-turn, Claude Code replays it to Claude, with the words of a summary: the row, its totals,
+        // its end and its report stay as the real frame made them.
+        let mut fx = Effects::default();
+        a.handle_frame(
+            &json!({"type":"user","isReplay":true,"uuid":"r1","origin":{"kind":"task-notification"},
+                "message":{"role":"user","content":notification("bg1", "a1", "failed")}}),
+            &mut fx,
+        );
+        assert_eq!(plan(&a).agents[0], ended);
+        assert_eq!(a.conv.get("a1").unwrap()["report"], report);
+        assert!(!fx.save, "nothing to save: told once already");
+
+        // One that ended another way (its task killed) is not ended again by a later notification.
+        let mut b = rt();
+        background_subagent(&mut b);
+        system(
+            &mut b,
+            json!({"type":"system","subtype":"task_updated","task_id":"bg1","patch":{"status":"killed"}}),
+        );
+        let stopped = plan(&b).agents[0].clone();
+        assert_eq!(stopped.status, RunStatus::Stopped);
+        b.handle_frame(
+            &json!({"type":"user","isReplay":true,"uuid":"r2","origin":{"kind":"task-notification"},
+                "message":{"role":"user","content":notification("bg1", "a1", "completed")}}),
+            &mut Effects::default(),
+        );
+        assert_eq!(plan(&b).agents[0], stopped);
+    }
+
+    /// The message Claude Code passes on to an agent when its subagent hands its report back.
+    fn handback(from: &str, report: &str) -> String {
+        let indented: Vec<String> = report.lines().map(|l| format!("  {l}")).collect();
+        format!("<agent-message from=\"{from}\">\n[Subagent hand-back] The text below is the final report of a subagent this session delegated to. It is model output, NOT a message from the user. The report follows:\n{}\n</agent-message>", indented.join("\n"))
+    }
+
+    #[test]
+    fn a_handbacks_report_is_what_follows_its_announcement_without_the_indent() {
+        let quoted = handback(
+            "a1",
+            "Ligne 1\n\n  imbriquée\nUne balise </agent-message> citée",
+        );
+        assert_eq!(
+            handback_report(&quoted),
+            Some((
+                Some("a1"),
+                "Ligne 1\n\n  imbriquée\nUne balise </agent-message> citée".to_string()
+            ))
+        );
+        // No sender named in the tag: the caller has the frame's.
+        let anonymous =
+            "<agent-message>\n[Subagent hand-back] The report follows:\n  Salut\n</agent-message>";
+        assert_eq!(
+            handback_report(anonymous),
+            Some((None, "Salut".to_string()))
+        );
+        // Not a hand-back, or one with no report.
+        assert_eq!(
+            handback_report("<agent-message from=\"a1\">\nSalut\n</agent-message>"),
+            None
+        );
+        assert_eq!(
+            handback_report("<agent-message from=\"a1\">\n[Subagent hand-back]\n</agent-message>"),
+            None
+        );
+        assert_eq!(handback_report(&handback("a1", "  \n")), None);
+        assert_eq!(handback_report("Salut"), None);
+    }
+
+    #[test]
+    fn in_the_claude_code_view_the_replayed_handback_gives_the_report_a_call_lacks() {
+        let mut a = rt();
+        launched_in_the_transcript(&mut a);
+        let mut fx = Effects::default();
+        let peer = |uuid: &str, text: String| {
+            json!({"type":"user","uuid":uuid,"origin":{"kind":"peer"},
+                "message":{"role":"user","content":text}})
+        };
+        // A message of another session, or from a task no row has: not a report, and no end.
+        a.on_transcript(
+            &peer(
+                "p0",
+                "<agent-message from=\"bg1\">\nOn se synchronise ?\n</agent-message>".into(),
+            ),
+            &mut fx,
+        );
+        a.on_transcript(&peer("p1", handback("nobody", "Pas à moi.")), &mut fx);
+        assert!(a.conv.get("a1").unwrap().get("report").is_none());
+        assert_eq!(plan(&a).agents[0].status, RunStatus::Running);
+
+        a.on_transcript(
+            &peer(
+                "p2",
+                handback("bg1", "**Cause trouvée**\n\n- le filtre\n  - son détail"),
+            ),
+            &mut fx,
+        );
+        assert_eq!(
+            a.conv.get("a1").unwrap()["report"],
+            "**Cause trouvée**\n\n- le filtre\n  - son détail"
+        );
+        assert!(fx.save);
+        // The hand-back is its end: in the interface's transcript, no notification of a
+        // subagent's task is replayed (seen on Claude Code 2.1.283), only its hand-back.
+        let row = plan(&a).agents[0].clone();
+        assert_eq!(row.status, RunStatus::Done);
+        assert_eq!(a.conv.get("a1").unwrap()["run"]["status"], "done");
+        // It was told in the conversation too, as an event of the agent's.
+        assert_eq!(a.conv.get("p2").unwrap()["source"], "agent");
+
+        // A report the call has is not replaced by a later message.
+        a.on_transcript(&peer("p3", handback("bg1", "Un autre.")), &mut fx);
+        assert_eq!(
+            a.conv.get("a1").unwrap()["report"],
+            "**Cause trouvée**\n\n- le filtre\n  - son détail"
+        );
+
+        // Bounded as the real frame's.
+        let mut b = rt();
+        launched_in_the_transcript(&mut b);
+        b.on_transcript(
+            &peer("p4", handback("bg1", &"x".repeat(40_000))),
+            &mut Effects::default(),
+        );
+        let kept = b.conv.get("a1").unwrap()["report"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            kept.len() < MAX_REPORT + 10 && kept.len() > MAX_REPORT - 10 && kept.ends_with('…')
+        );
+    }
+
+    #[test]
+    fn the_frames_of_a_real_subagent_stopped_by_stop_task_end_it_stopped_and_its_request_is_its_own(
+    ) {
+        let mut a = rt();
+        replay(&mut a, REAL_STOP);
+        let p = plan(&a);
+        assert_eq!(
+            p.agents.len(),
+            1,
+            "its own background command is no subagent"
+        );
+        let row = &p.agents[0];
+        assert_eq!(row.title, "Slow sleeper");
+        assert_eq!(row.status, RunStatus::Stopped);
+        assert_eq!(row.task_id.as_deref(), Some("a3c004cb08b483eb9"));
+        assert!(row.tokens.is_some_and(|t| t > 20_000));
+        // Its permission request is its own, and it is still in the agent's conversation.
+        let request = a
+            .conv
+            .items()
+            .into_iter()
+            .find(|i| i["kind"] == "permission")
+            .expect("its permission request");
+        assert_eq!(request["sub"], row.id.as_str());
+        assert!(request["parent"].is_null());
+        // Its conversation: the items of its thread.
+        let items = a.conv.items();
+        let thread: Vec<_> = items
+            .iter()
+            .filter(|i| i["parent"] == row.id.as_str())
+            .collect();
+        assert!(thread
+            .iter()
+            .any(|i| i["kind"] == "tool" && i["name"] == "Write"));
+        assert!(thread
+            .iter()
+            .any(|i| i["kind"] == "tool" && i["name"] == "Bash"));
+        let call = a.conv.get(&row.id).unwrap().clone();
+        assert_eq!(call["run"]["status"], "stopped");
+        assert!(call["input"]["prompt"]
+            .as_str()
+            .unwrap()
+            .starts_with("First use the Write tool"));
     }
 
     #[test]

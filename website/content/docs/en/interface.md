@@ -50,7 +50,7 @@ A tab’s tooltip also gives the path of the project’s folder.
 | “Turn on a worktree per agent” or “Turn off a worktree per agent” | Switches the option for the project’s new agents. See [worktrees](worktrees). |
 | “Project settings…” | Opens the settings, Projects tab, on this project. |
 | “Open the folder” | Opens the project’s folder in the system’s file manager. |
-| “Close the project…” | Removes the project and its agents from the application, conversations included, after a confirmation. The files and the worktrees on disk are not touched. |
+| “Close the project…” | Removes the project from the application after a confirmation: its agents, terminals, and launches stop. Its history (conversations, tickets, settings) is kept, and adding a project in the same folder brings it back; a box in the confirmation lets you erase it too. The files and the worktrees on disk are not touched. See [Settings: Projects](settings-projects#closed-projects). |
 
 ### The bar’s buttons
 
@@ -70,7 +70,7 @@ The “Agents” header carries the number of agents in the project and the “+
 
 Each agent is a card:
 
-- its **name** (double-click to rename it in place: `Enter` confirms, `Esc` cancels), a waves icon when [remote control](remote-control) is on (blue once connected), and its **status**;
+- its **name** (double-click to rename it in place: `Enter` confirms, `Esc` cancels), a waves icon when [remote control](remote-control) is on (blue once connected; its tooltip says where it comes from: you, the project’s setting, or the setting for all agents; in the [Claude Code view](claude-code-view), it says the state of the interface), and its **status**;
 - what the agent says it is doing, when it said so through the [MCP server](mcp);
 - its **model**, the time it has worked and, if it has a worktree, its branch (`⎇ …`);
 - its **tokens**, its **cost** (preceded by “≈” while a turn is running: it is then an estimate) and the number of its changed files (“N files”);
@@ -107,7 +107,7 @@ A right click on a card opens its menu:
 | “Open in editor” | Opens the editor on its worktree, otherwise on the project’s folder. |
 | “Open a terminal” | Opens a terminal in its worktree, otherwise in the project’s folder. |
 | “Claude Code view” or “Escouade view” | Switches views, like the button in its conversation header. Absent for a ticket’s agent and for an archived agent. See [the Claude Code view](claude-code-view). |
-| “Turn on remote control” or “Turn off remote control” | Makes the session reachable from claude.ai and the Claude app (“claude.ai, mobile”). When the link is available, “Open on claude.ai” and “Copy the claude.ai link” appear. Absent in the [Claude Code view](claude-code-view), where Claude Code’s own `/remote-control` command does it. |
+| “Turn on remote control” or “Turn off remote control” | Makes the session reachable from claude.ai and the Claude app (“claude.ai, mobile”). When the link is available, “Open on claude.ai” and “Copy the claude.ai link” appear. “Turn off” always sets the agent apart: a setting turned on afterwards doesn’t give it remote control back. In the [Claude Code view](claude-code-view), “Open on claude.ai” and “Copy the claude.ai link” only appear once the interface is connected, and the change takes effect the next time the interface starts. |
 | “Delete…” | Stops the Claude process and removes the conversation from the application; the Claude Code session stays on disk. For an agent with a worktree, a checkbox offers to delete the worktree too, and its branch if it was created for the agent. |
 
 Archived agents are under “Archived (N)”, a title you unfold with a click; their card only shows the name and the cost.
@@ -118,7 +118,7 @@ The “Launch” section lists the project’s launch commands (development serv
 
 ### Terminals
 
-The “Terminals” section lists the project’s open terminals. The `+` button (“New terminal”) offers the shells detected on the machine, and `Ctrl+T` opens one right away. A click on a terminal shows it in the main area, the × closes it, and a terminal whose shell stopped is marked “exited”. See [terminals](terminals).
+The “Terminals” section lists the project’s open terminals. The `+` button (“New terminal”) offers the shells detected on the machine, then “In the worktree of…”, which lists the project’s agents that have a worktree (not the archived ones) to open a terminal in it; the entry isn’t there when no agent has one. `Ctrl+T` opens one right away. A click on a terminal shows it in the main area, the × closes it, and a terminal whose shell stopped is marked “exited”. See [terminals](terminals).
 
 ### The foot of the sidebar
 
@@ -135,6 +135,7 @@ The header of an agent’s conversation shows, from left to right:
 | Name and status | The agent’s name (double-click to rename it) and its status. |
 | `project / branch` | The project, and the agent’s branch if it has a worktree, otherwise the branch of the project’s folder. |
 | “Editor” | Opens the editor on the agent’s files. |
+| “Terminal” | For an agent in a worktree (not archived): opens a [terminal](terminals) in that worktree. |
 | “▶ Test” or “Prepare launch” | For an agent in a worktree: launch its work to try it, or ask the agent how to launch it. See [review and approve](testing). |
 | “Claude Code view” or “Escouade view” | Runs the agent in Claude Code’s own interface, or brings it back to Escouade’s conversation. Absent for a ticket’s agent. See [the Claude Code view](claude-code-view). |
 | The model | The agent’s model, with its version. |

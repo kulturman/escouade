@@ -105,6 +105,11 @@ export default {
     todoTools: 'Les agents tiennent une liste de tâches',
     todoToolsDesc:
       'Donne aux agents l’outil de liste de tâches de Claude Code : s’ils la tiennent, Escouade montre leur avancée dans le bandeau « Plan » (le modèle n’est pas obligé de s’en servir). S’applique aux agents lancés ensuite.',
+    /** The group of the remote control of every agent, after the MCP server’s. */
+    remoteTitle: 'Remote control',
+    remoteAll: 'Remote control pour tous les agents',
+    remoteAllDesc:
+      'Chaque agent de chaque projet, existant ou nouveau (agents des tickets compris), est accessible depuis claude.ai et l’app Claude. Escouade lance tout de suite le process claude de chacun, qui reste lancé. La session apparaît sur claude.ai sous le nom « projet · agent » (pour un agent de ticket, son nom vient du ticket). En vue Claude Code, une interface déjà ouverte ne le prend qu’à son prochain lancement. Pour mettre un agent à part : clic droit, « Désactiver le remote control ».',
   },
 
   // The « Notifications » tab.
@@ -179,6 +184,13 @@ export default {
     identity: 'Identité',
     nameLabel: 'Nom du projet',
     colorN: 'Couleur {n}',
+    /** The group of the remote control of the project’s agents, after its identity. */
+    remoteTitle: 'Remote control',
+    remote: 'Remote control pour les agents de ce projet',
+    remoteDesc:
+      'Chaque agent de ce projet, existant ou nouveau (agents des tickets compris), est accessible depuis claude.ai et l’app Claude. Escouade lance tout de suite le process claude de chacun, qui reste lancé. La session apparaît sur claude.ai sous le nom « projet · agent » (pour un agent de ticket, son nom vient du ticket). En vue Claude Code, une interface déjà ouverte ne le prend qu’à son prochain lancement. Pour mettre un agent à part : clic droit, « Désactiver le remote control ».',
+    /** Under the switch, shown on and disabled: the setting for all agents covers the project already. */
+    remoteGlobal: 'Activé pour tous les projets dans Réglages › Claude Code',
     worktreePerAgent: 'Un worktree par agent',
     worktreePerAgentDesc: 'Isole les modifications de chaque nouvel agent dans sa propre branche.',
     worktreeDir: 'Dossier des worktrees',
@@ -243,8 +255,31 @@ export default {
     danger: 'Zone sensible',
     close: 'Fermer le projet',
     closeDesc:
-      "Le projet et ses agents sont retirés de l'application, conversations comprises. Les fichiers et les worktrees sur le disque ne sont pas touchés.",
+      "Le projet quitte l'application : ses agents, ses terminaux et ses lancements s'arrêtent. Son historique (conversations, tickets, réglages) est gardé : rouvrir ce dossier le retrouve. Les fichiers et les worktrees sur le disque ne sont pas touchés.",
     closeButton: 'Fermer le projet…',
+  },
+
+  // The projects closed with their history kept (under the « Projets » tab).
+  closed: {
+    title: 'Projets fermés',
+    note: 'Leur historique est gardé : ajouter un projet dans leur dossier le retrouve.',
+    /** `{size}`: what the history takes on the disk; `{date}`: its last activity. */
+    detail: '{size} · dernière activité le {date}',
+    erase: "Effacer l'historique…",
+    eraseTitle: "Effacer l'historique de « {name} » ?",
+    eraseBody:
+      'Ses conversations, ses tickets et ses réglages sont effacés pour de bon. Les fichiers et les worktrees sur le disque ne sont pas touchés.',
+    eraseConfirm: "Effacer l'historique",
+    /** Ouvre la fenêtre d'ajout sur le dossier du projet fermé et sur cet historique-là. */
+    reopen: 'Rouvrir',
+    /** Un fichier de projet fermé que l'application ne sait pas lire : il ne peut qu'être effacé, lui seul. */
+    unreadable: 'Historique illisible',
+    eraseFile: 'Effacer',
+    /** `{file}` : le nom du fichier (`abc123.json`). */
+    eraseFileTitle: 'Effacer le fichier « {file} » ?',
+    eraseFileBody:
+      "Ce fichier, que l'application ne peut pas lire, est effacé pour de bon. Les autres historiques, les fichiers et les worktrees sur le disque ne sont pas touchés.",
+    eraseFileConfirm: 'Effacer le fichier',
   },
 
   // The commands run in a project's worktrees (their setup, their teardown), in order.

@@ -1,6 +1,6 @@
 # Settings: Claude Code
 
-The “Claude Code” tab sets the Claude Code executable, the model, effort, and permission mode of new agents, how Claude processes live, and the server that lets Claude drive Escouade.
+The “Claude Code” tab sets the Claude Code executable, the model, effort, and permission mode of new agents, how Claude processes live, remote control for all agents, and the server that lets Claude drive Escouade.
 
 ## Executable
 
@@ -104,6 +104,20 @@ If the agent keeps a list, Escouade shows its progress in the “Plan” banner;
 
 The field is a number of minutes; 0 means never, and an empty field counts as 0. The session of an agent whose process was stopped stays resumable. An agent in remote control is never stopped this way, so that it stays reachable from claude.ai.
 
+## Remote control
+
+This group makes the agents of every project reachable from claude.ai and the Claude app, without turning on [remote control](remote-control) agent by agent.
+
+### Remote control for all agents
+
+The switch is off by default. When on, every agent of every project, existing or new (ticket agents included), is reachable from claude.ai and the Claude app. Escouade starts each one’s `claude` process right away, at most 3 at a time, and it stays running: it starts with the app and is never stopped for inactivity. The session appears on claude.ai as “project · agent” (for a ticket agent, the name comes from the ticket). In Claude Code view, an interface that is already open only picks it up at its next launch. To set an agent apart, right-click its card, then “Turn off remote control”.
+
+The setting is saved with “Save”, like most of the others. When off, it takes remote control away from the agents that had it from this setting, without touching those you turned on by hand or those their project’s setting still covers.
+
+While it is on, the “Remote control for this project’s agents” switch of each project, in the [“Projects” tab](settings-projects), shows on and grayed out: “On for all projects in Settings › Claude Code”. Each project’s own choice is kept, and comes back when this one is off.
+
+For an agent in the [Claude Code view](claude-code-view), the change takes effect the next time its interface starts. The page on [remote control](remote-control) gives the detail: where it comes from, how to set an agent apart, and what happens at restart.
+
 ## Escouade in Claude
 
 This group lets Claude Code, in a terminal, in another tool, or in an Escouade agent, read your projects, agents, and tickets, and create tickets or start agents, through Escouade’s [MCP server](mcp).
@@ -126,4 +140,4 @@ With the switch on, a line below it says where the declaration stands:
 
 ## MCP activity
 
-This last group, “MCP activity”, lists what the server received and answered, the most recent calls first. Each line gives the time, who called (an agent’s name, “Claude (outside Escouade)”, or, for a request refused before it is known who sent it, “Unknown client”), the tool, the result (“Done”, “Refused”, or “Error”), then what was asked and, for a refusal or an error, why. The last 200 calls are kept in memory, not saved. The “Clear” button empties the list; with no calls, it says “No calls yet.”.
+This last group, “MCP activity”, lists what the server received and answered, the most recent calls first. Each line gives the time, who called (an agent’s name, “Claude (outside Escouade)”, or, for a request refused before it is known who sent it, “Unknown client”), the tool, the result (“Done”, “Refused”, or “Error”), then what was asked and, for a refusal or an error, why. For a `set_board` that succeeded, the line also says what changed, field by field, before and after (“model: opus → sonnet · effort: (default) → medium”), or “No change”. The last 200 calls are kept in memory, not saved. The “Clear” button empties the list; with no calls, it says “No calls yet.”.

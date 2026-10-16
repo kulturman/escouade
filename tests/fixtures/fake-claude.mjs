@@ -7,6 +7,9 @@
 // unknown session does, forked or not; with `--fork-session`, the resumed conversation goes on under a new session id, and a
 // `--resume-session-at=missing…` entry fails as one Claude Code cannot find does. Each assistant
 // message carries the uuid of its entry in the session (`entry-<pid>-<n>`).
+// "flood 90s" (60 s by default) keeps it busy for that long, as an agent hard at work: a text streamed in small deltas (one
+// every 15 ms) and a tool call with ~1.5 KB of output every ~170 ms, then the turn ends; an interrupt stops it.
+// "flood-real 90s" (60 s by default) plays a busy superpowers agent for that long, timers pacing it: a 40-task plan, then subagents, tool results of 2-30 KB.
 // Every launch appends {argv, cwd, pid, proxy, tls, configDir, todoTools} (its process id, which names a
 // new session of it `sess-<pid>`, its HTTPS_PROXY,
 // NODE_TLS_REJECT_UNAUTHORIZED, CLAUDE_CONFIG_DIR and CLAUDE_CODE_ENABLE_TODO_TOOLS, null when unset) to $FAKE_CLAUDE_LOG, by
@@ -45,6 +48,10 @@
 // its workspace removed, then "Plan terminé". "plan superpowers sans liste": the same without any task tool, so that the
 // plan file and the ledger are all there is to read; "interrompu" in the message cuts the turn in
 // the middle of the first implementer.
+// "sous-agent long" and "sous-agent fini" launch a subagent in the background as Claude Code 2.1.300 does (ESC-13): its
+// own thread asks a permission (`can_use_tool` with its `agent_id`, request "req_subperm"); "sous-agent long" then runs
+// until a `stop_task` of its task ("fakelong-agent", logged to <log>.control.jsonl), "sous-agent fini" hands back its
+// report (`handback_report`) once the permission is answered.
 // Asked to prepare a test launch (« Prépare le lancement… Ports réservés : <base> », “Prepare the test
 // launch… Ports reserved: <base>”), any agent answers with a recipe whose process listens on <base + 1>.
 // In one-shot mode, asked for a ticket's commit message, it answers `feat: travail du faux claude
@@ -282,17 +289,64 @@ if (argv[0] === 'mcp') {
 
 // Claude Code's own interface (« Vue Claude Code »: no -p, its hooks in --settings). It needs
 // CLAUDE_CONFIG_DIR. Each line it reads (pasted text, then Enter) is a prompt: it calls the hooks
-// of the settings (HTTP, with the token of ESCOUADE_HOOK_TOKEN) and writes its transcript as
+// of the settings (HTTP, with the token of ESCOUADE_HOOK_TOKEN), shows `fake-turn <prompt>` on its
+// screen when a turn starts, and writes its transcript as
 // Claude Code does (see tests/fixtures/tui-transcript.jsonl). "permission" in the prompt asks for
 // Bash first and goes on once the next Enter comes; "lent" makes the turn wait for Escape, which
 // interrupts it; "/exit" ends the process. A pasted path to an image file is the image, as Claude
 // Code takes it (« [Image #1] »): its path and content (base64) are added to <dir>/fake-tui-images.jsonl.
+// Like the real one (2.1.301) it sends no SessionStart hook (Claude Code skips its HTTP hooks for that
+// event). Once it is up (past its welcome screen and the box about the folder) it registers itself as
+// Claude Code does, in <CLAUDE_CONFIG_DIR>/sessions/<pid>.json ({pid, sessionId, cwd, startedAt, version,
+// kind: "interactive", entrypoint: "cli", status}), a file it removes when it ends; while <log>.tui-welcome
+// is there it is not up (a welcome screen: no registry file, no Remote Control either), and goes on when the
+// file is removed. Started with --remote-control=<name>, once it is up it opens Remote Control: a
+// `bridge-session` and a `bridge_status` entry with the link in its transcript, and the `bridgeSessionId`
+// of its registry file, as Claude Code does. While <log>.tui-rc-hold is there it does not open it (as an
+// account with no subscription, or a network that refuses), and does when the file is removed; while
+// <log>.tui-rc-inactive is there the `bridge_status` it writes has no link ("/remote-control is not active")
+// and the registry has no `bridgeSessionId`; while <log>.tui-rc-registry-only is there the link is told in the
+// registry alone; while <log>.tui-rc-exit is there
+// it closes 200 ms after it started (code 1). Each Ctrl+C (\x03) it reads is added, with its time (ms),
+// to <log>.quit.jsonl; the second one ends it (code 0), as Claude Code quits on two, unless
+// <log>.tui-ignore-quit is there: then it goes on.
+// As Claude Code does, it writes no transcript before its first message (a session that never got one cannot be resumed), and
+// a `--resume=<id>` of a session absent from every <dir>/projects/* folder (or named `missing…`) fails as an unknown one does:
+// "No conversation found with session ID: <id>" on stderr, exit code 1, a moment after (the pseudo-console flushes its
+// output). While a <dir>/fake-no-conversation file is there, every `--resume` fails so, the session known or not (a
+// transcript that Claude Code does not see); while a <dir>/fake-tui-crash file is there, it writes
+// "fake-claude-tui: crashed" on stderr and exits with code 1 at once, whatever it was asked.
+// Like Claude Code's interface (a raw-mode terminal that echoes nothing itself), it draws the prompt line again at each key
+// it reads: `\r ESC[2K > ` and what is typed so far; a typed character is added to it, Backspace (\x7f) takes the last one off,
+// Ctrl+U (\x15) clears the line, a submitted prompt leaves an empty one. Inside a bracketed paste it draws nothing until the
+// paste ends, and then the line once.
 function tuiSession() {
   const settings = JSON.parse(fs.readFileSync(argv[argv.indexOf('--settings') + 1], 'utf8'));
   const flag = (name) => argv.find((a) => a.startsWith(`${name}=`))?.slice(name.length + 1);
-  const sessionId = flag('--session-id') ?? flag('--resume') ?? `sess-${process.pid}`;
+  const side = (kind) => logFile.replace(/\.jsonl$/, '') + `.${kind}`;
+  // It quits as Claude Code does, once what it wrote has reached the terminal.
+  const quit = (text) => {
+    try {
+      fs.writeSync(2, text);
+    } catch {
+      process.stderr.write(text);
+    }
+    setTimeout(() => process.exit(1), 150);
+  };
+  if (configDir && fs.existsSync(path.join(configDir, 'fake-tui-crash'))) {
+    quit('fake-claude-tui: crashed\r\n');
+    return;
+  }
+  const resume = flag('--resume');
+  if (
+    resume &&
+    (resume.startsWith('missing') || (configDir && (fs.existsSync(path.join(configDir, 'fake-no-conversation')) || !sessionKept(resume))))
+  ) {
+    quit(`No conversation found with session ID: ${resume}\r\n`);
+    return;
+  }
+  const sessionId = flag('--session-id') ?? resume ?? `sess-${process.pid}`;
   const file = sessionFile(sessionId);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   const model = argv[argv.indexOf('--model') + 1] ?? 'sonnet';
   const ts = () => new Date().toISOString();
   const write = (entry) => fs.appendFileSync(file, JSON.stringify({ ...entry, sessionId, timestamp: ts() }) + '\n');
@@ -328,9 +382,34 @@ function tuiSession() {
   // No space: ConPTY draws a run of spaces as a cursor move (ESC[nC). Pastes come bracketed
   // (ESC[200~ … ESC[201~), as Claude Code asks for them.
   process.stdout.write('\x1b[?2004hfake-claude-tui\r\n');
-  write({ type: 'permission-mode', permissionMode: argv[argv.indexOf('--permission-mode') + 1] ?? 'default' });
+  // The session's file is made with its first message, not before.
+  let begun = false;
+  const begin = () => {
+    if (begun) return;
+    begun = true;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    write({ type: 'permission-mode', permissionMode: argv[argv.indexOf('--permission-mode') + 1] ?? 'default' });
+  };
+  // The size of its terminal, as Claude Code's interface reads it to draw (ink: process.stdout.rows): each one it had is added
+  // to <dir>/fake-tui-size.jsonl. Read from the console itself, not from the 'resize' event, which a pseudo-console may not send.
+  let size = '';
+  const reportSize = () => {
+    const [cols, rows] = process.stdout.getWindowSize?.() ?? [process.stdout.columns, process.stdout.rows];
+    if (`${cols}x${rows}` === size) return;
+    size = `${cols}x${rows}`;
+    // The account's folder may not be there yet: the session's file is made with its first message.
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.appendFileSync(path.join(configDir, 'fake-tui-size.jsonl'), JSON.stringify({ cols, rows }) + '\n');
+  };
+  reportSize();
+  setInterval(reportSize, 50).unref();
+  const remote = flag('--remote-control');
+  if (remote !== undefined && fs.existsSync(side('tui-rc-exit'))) setTimeout(() => process.exit(1), 200);
   const turn = async (prompt) => {
     if (prompt === '/exit') process.exit(0);
+    begin();
+    // What its screen shows of the turn that starts (the terminal's output the app keeps).
+    process.stdout.write(`fake-turn ${prompt}\r\n`);
     await hook('UserPromptSubmit', { prompt });
     write({ type: 'user', uuid: `u-${process.pid}-${n++}`, origin: { kind: 'human' }, message: { role: 'user', content: prompt } });
     if (prompt.includes('permission')) {
@@ -363,12 +442,27 @@ function tuiSession() {
     await hook('Stop', { stop_hook_active: false });
     write({ type: 'system', subtype: 'turn_duration', durationMs: 12, isSidechain: false });
   };
-  // As Claude Code's interface: every key as it comes (Escape alone, Enter as \r).
+  // As Claude Code's interface: every key as it comes (Escape alone, Enter as \r), and the prompt line drawn again at each.
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
   process.stdin.setEncoding('utf8');
   let pasteStart = null;
   let images = 0;
+  let ctrlC = 0;
+  const draw = () => process.stdout.write(`\r\x1b[2K> ${line}`);
+  // What the keys typed do to the line: a character is added, Backspace takes the last one off, Ctrl+U clears it.
+  const edit = (keys) => {
+    for (const c of keys) {
+      if (c === '\x7f' || c === '\b') line = line.slice(0, -1);
+      else if (c === '\x15') line = '';
+      else line += c;
+    }
+  };
   process.stdin.on('data', (chunk) => {
+    for (const _ of chunk.matchAll(/\x03/g)) {
+      fs.appendFileSync(side('quit.jsonl'), JSON.stringify({ at: Date.now() }) + '\n');
+      if (++ctrlC >= 2 && !fs.existsSync(side('tui-ignore-quit'))) process.exit(0);
+    }
+    chunk = chunk.replaceAll('\x03', '');
     for (const part of chunk.split(/(\x1b\[20[01]~|\r|\x1b)/)) {
       if (part === '\x1b[200~') pasteStart = line.length;
       if (part === '\x1b[201~' && pasteStart !== null && pasteStart <= line.length) {
@@ -378,10 +472,16 @@ function tuiSession() {
           .replace(/^"(.*)"$/, '$1');
         if (/\.(png|jpe?g|gif|webp)$/i.test(file) && fs.existsSync(file)) {
           const data = fs.readFileSync(file).toString('base64');
+          fs.mkdirSync(configDir, { recursive: true });
           fs.appendFileSync(path.join(configDir, 'fake-tui-images.jsonl'), JSON.stringify({ path: file, data }) + '\n');
           line = line.slice(0, pasteStart) + `[Image #${++images}]`;
         }
         pasteStart = null;
+      }
+      if (part === '\x1b[201~') {
+        // The paste is over (also one a line break in it cut short): the line, drawn once.
+        pasteStart = null;
+        draw();
       }
       if (part === '\x1b[200~' || part === '\x1b[201~' || part === '') continue;
       if (part === '\x1b') {
@@ -392,11 +492,59 @@ function tuiSession() {
         } else if (line.trim()) {
           const prompt = line.trim();
           line = '';
+          draw();
           turn(prompt);
         }
-      } else line += part;
+      } else if (pasteStart !== null) line += part;
+      else {
+        edit(part);
+        draw();
+      }
     }
   });
+  // Up and reading its input: registered, as Claude Code 2.1.301 does once it is past its welcome
+  // screen and the box about the folder (the one signal an interface no window shows is ready by),
+  // then Remote Control opened, if it was started with it.
+  const registry = configDir ? path.join(configDir, 'sessions', `${process.pid}.json`) : null;
+  const registered = {
+    pid: process.pid,
+    sessionId,
+    cwd: process.cwd(),
+    startedAt: Date.now(),
+    version: '2.1.301',
+    kind: 'interactive',
+    entrypoint: 'cli',
+    status: 'idle',
+  };
+  const register = (extra = {}) => {
+    if (!registry) return;
+    fs.mkdirSync(path.dirname(registry), { recursive: true });
+    fs.writeFileSync(registry, JSON.stringify({ ...registered, ...extra }));
+  };
+  process.on('exit', () => {
+    if (registry) fs.rmSync(registry, { force: true });
+  });
+  const until = async (kind) => {
+    while (fs.existsSync(side(kind))) await new Promise((resolve) => setTimeout(resolve, 50));
+  };
+  (async () => {
+    await until('tui-welcome');
+    register();
+    if (remote === undefined) return;
+    await until('tui-rc-hold');
+    // Remote Control makes the session's file, as Claude Code does, before any message.
+    begin();
+    const url = `https://claude.ai/code/session_fake_tui_${process.pid}`;
+    if (fs.existsSync(side('tui-rc-inactive'))) {
+      write({ type: 'system', subtype: 'bridge_status', content: '/remote-control is not active' });
+      return;
+    }
+    const bridgeSessionId = `cse_fake_tui_${process.pid}`;
+    register({ bridgeSessionId });
+    if (fs.existsSync(side('tui-rc-registry-only'))) return;
+    write({ type: 'bridge-session', bridgeSessionId });
+    write({ type: 'system', subtype: 'bridge_status', content: `/remote-control is active · ${url}`, url });
+  })();
 }
 
 function startSession() {
@@ -422,7 +570,10 @@ function startSession() {
   let msg = 0;
   let pendingAnswer = null;
   let slowTimer = null;
+  let floodTimer = null;
   let asked = false;
+  // The subagent of "sous-agent long" while it runs, until a `stop_task` of its task: { task, call, description }.
+  let longAgent = null;
   const replay = argv.includes('--replay-user-messages');
   const appended = argv.includes('--append-system-prompt') ? (argv[argv.indexOf('--append-system-prompt') + 1] ?? '') : '';
   // What a copy of an agent is told of its folder is no ticket's protocol: it plays a plain agent.
@@ -434,6 +585,15 @@ function startSession() {
 
   const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
   const ok = (id, response = {}) => out({ type: 'control_response', response: { subtype: 'success', request_id: id, response } });
+  // While <log>.<kind>-slow is there, holding a number of milliseconds, `later` runs `then` that
+  // long after (kind: 'initialize', 'remote'): a request whose answer takes its time.
+  const later = (kind, then) => {
+    let ms = 0;
+    try {
+      ms = Number(fs.readFileSync(logFile.replace(/\.jsonl$/, '') + `.${kind}-slow`, 'utf8')) || 0;
+    } catch {}
+    return ms ? setTimeout(then, ms) : then();
+  };
 
   // An entry of the session, kept in the account's folder when it has one.
   function keep(entry) {
@@ -564,6 +724,216 @@ function startSession() {
       };
     }
     streamText(`Boucle ${loop} faite.\n\n\`\`\`escouade\n${JSON.stringify(report)}\n\`\`\``);
+    result();
+  }
+
+  // ---------- "flood" ----------
+
+  // A busy agent for `ms`: ten deltas of 40 characters (one every 15 ms) make a message, a tool call comes after it
+  // and its output (~1.5 KB) on the next tick, and so on. One timer paces it; an interrupt clears it (`floodTimer`).
+  function flood(ms) {
+    clearInterval(floodTimer);
+    const end = Date.now() + ms;
+    const words = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore ';
+    const output = Array.from({ length: 24 }, (_, i) => `ligne ${String(i + 1).padStart(2, '0')} : ${'abcdefghij'.repeat(5)}`).join('\n');
+    const ev = (event) => out({ type: 'stream_event', event, parent_tool_use_id: null, session_id: sessionId });
+    let id = null;
+    let text = '';
+    let call = null;
+    let calls = 0;
+    floodTimer = setInterval(() => {
+      if (Date.now() >= end) {
+        clearInterval(floodTimer);
+        result();
+        return;
+      }
+      if (call) {
+        toolResult(call, output, { tool_use_result: { stdout: output, stderr: '', interrupted: false } });
+        call = null;
+        return;
+      }
+      if (id === null) {
+        id = `msg_${process.pid}_${++msg}`;
+        text = '';
+        ev({
+          type: 'message_start',
+          message: { id, usage: { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 } },
+        });
+        ev({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+      }
+      const from = (text.length * 7 + calls) % (words.length - 40);
+      const delta = words.slice(from, from + 40);
+      text += delta;
+      ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta } });
+      if (text.length < 400) return;
+      assistant({ type: 'text', text }, id);
+      ev({ type: 'content_block_stop', index: 0 });
+      ev({ type: 'message_stop' });
+      id = null;
+      call = `toolu_f${process.pid}_${++calls}`;
+      const command = `npm test -- --shard ${calls}`;
+      assistant({ type: 'tool_use', id: call, name: 'Bash', input: { command, description: command } });
+    }, 15);
+  }
+
+  // ---------- "flood-real" ----------
+
+  // A busy agent as the superpowers skills drive one, for `ms`: a plan of 40 tasks (TaskCreate), then task after task its
+  // TaskUpdate, its own messages and tool calls and an implementer's and a reviewer's subagent (frames with a
+  // `parent_tool_use_id`), the results of 2 to 30 KB. Every message streams in small deltas, every step is a timer: ~50
+  // stream lines a second, ~8 of which change the agent's view. An interrupt clears the timer: the chain below is dropped.
+  async function floodReal(ms) {
+    clearTimeout(floodTimer);
+    const end = Date.now() + ms;
+    const over = new Error('flood-real over');
+    const sleep = (t) => new Promise((resolve, reject) => (Date.now() >= end ? reject(over) : (floodTimer = setTimeout(resolve, t))));
+    const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+    const pick = (list) => list[rnd(0, list.length - 1)];
+    const prose =
+      'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua '.repeat(
+        30,
+      );
+    const said = (n) => {
+      const from = rnd(0, 100);
+      return prose.slice(from, from + n);
+    };
+    const big = Array.from({ length: 320 }, (_, i) => `${String(i + 1).padStart(4, '0')}: ${said(90)}`).join('\n');
+    const output = () => big.slice(0, rnd(2 * 1024, 30 * 1024));
+    const ev = (parent, event) => out({ type: 'stream_event', event, parent_tool_use_id: parent, session_id: sessionId });
+    const system = (o) => out({ type: 'system', session_id: sessionId, ...o });
+    const dir = process.cwd();
+    const files = Array.from({ length: 12 }, (_, i) => `src/module${i + 1}.ts`);
+    let calls = 0;
+
+    // One assistant message in the thread of `parent` (null: the main one): `chars` of text in small deltas, then the call of
+    // the tool `name` (none: the message ends). Returns the call's id.
+    const message = async (parent, chars, name, input) => {
+      const id = `msg_${process.pid}_${++msg}`;
+      const call = `toolu_r${process.pid}_${++calls}`;
+      const usage = { input_tokens: rnd(3, 30), cache_read_input_tokens: rnd(20000, 90000), cache_creation_input_tokens: rnd(0, 900) };
+      ev(parent, { type: 'message_start', message: { id, usage } });
+      ev(parent, { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+      let text = '';
+      while (text.length < chars) {
+        const delta = said(rnd(15, 45));
+        text += delta;
+        ev(parent, { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta } });
+        await sleep(rnd(12, 28));
+      }
+      assistant({ type: 'text', text }, id, parent);
+      ev(parent, { type: 'content_block_stop', index: 0 });
+      if (name) {
+        const json = JSON.stringify(input);
+        const cut = json.length >> 1;
+        ev(parent, { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: call, name } });
+        ev(parent, { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: json.slice(0, cut) } });
+        ev(parent, { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: json.slice(cut) } });
+        assistant({ type: 'tool_use', id: call, name, input }, id, parent);
+        ev(parent, { type: 'content_block_stop', index: 1 });
+      }
+      ev(parent, {
+        type: 'message_delta',
+        delta: { stop_reason: name ? 'tool_use' : 'end_turn' },
+        usage: { output_tokens: Math.ceil(text.length / 4) + 50 },
+      });
+      ev(parent, { type: 'message_stop' });
+      return call;
+    };
+
+    // A message that calls a tool, and the tool's result a moment later.
+    const run = async (parent, chars, name, input, content, extra = {}) => {
+      const call = await message(parent, chars, name, input);
+      await sleep(rnd(60, 250));
+      toolResult(call, content, { parent_tool_use_id: parent, ...extra });
+    };
+
+    // A tool of the agent's work: a Read, a Grep, an Edit or a Bash, and its result.
+    const work = (parent) => {
+      const chars = parent ? rnd(100, 400) : rnd(200, 600);
+      const file = path.join(dir, pick(files));
+      const content = output();
+      switch (rnd(0, 3)) {
+        case 0:
+          return run(parent, chars, 'Read', { file_path: file }, content);
+        case 1:
+          return run(parent, chars, 'Grep', { pattern: said(12).trim(), path: dir }, content);
+        case 2:
+          return run(parent, chars, 'Edit', { file_path: file, old_string: said(120), new_string: said(160) }, content, {
+            tool_use_result: {
+              filePath: file,
+              structuredPatch: [{ oldStart: 10, oldLines: 3, newStart: 10, newLines: 4, lines: [' a', '-b', '+c', '+d'] }],
+            },
+          });
+        default: {
+          const command = `npm test -- --shard ${rnd(1, 9)}`;
+          return run(parent, chars, 'Bash', { command, description: command }, content, {
+            tool_use_result: { stdout: content, stderr: '', interrupted: false },
+          });
+        }
+      }
+    };
+
+    // A subagent in the foreground: launched by the main thread, its messages and tools in its own thread, its result.
+    const subagent = async (n, review) => {
+      const description = `${review ? 'Relire' : 'Implémenter'} la tâche ${n}`;
+      const prompt = `Lis .superpowers/sdd/demo/task-${n}-brief.md et fais ce qu'il demande.\n${said(rnd(600, 2500))}`;
+      const agent = { description, subagent_type: 'general-purpose', model: review ? 'sonnet' : 'haiku', prompt };
+      const id = await message(null, rnd(150, 400), 'Agent', agent);
+      system({
+        subtype: 'task_started',
+        task_id: `fakeflood-${id}`,
+        tool_use_id: id,
+        description,
+        subagent_type: agent.subagent_type,
+        is_backgrounded: false,
+        spawn_depth: 1,
+        task_type: 'local_agent',
+        prompt,
+        run_id: `run-${id}`,
+      });
+      const tools = rnd(3, 7);
+      for (let i = 0; i < tools; i++) await work(id);
+      await message(id, rnd(100, 300), null);
+      const content = [{ type: 'text', text: `${description} : fait. ${said(400)}` }];
+      toolResult(id, content, {
+        tool_use_result: {
+          status: 'completed',
+          agentId: `fakeflood-${id}`,
+          content,
+          totalToolUseCount: tools,
+          totalDurationMs: tools * 400,
+          totalTokens: tools * 1800,
+        },
+      });
+    };
+
+    const titles = Array.from({ length: 40 }, (_, i) => `Tâche ${i + 1} : ${said(30).trim()}`);
+    const update = (n, from, to) =>
+      run(null, rnd(40, 120), 'TaskUpdate', { taskId: String(n), status: to }, `Updated task #${n} status`, {
+        tool_use_result: { success: true, taskId: String(n), updatedFields: ['status'], statusChange: { from, to } },
+      });
+    try {
+      for (;;) {
+        for (const [i, subject] of titles.entries()) {
+          const input = { subject, description: said(rnd(100, 400)), activeForm: `Fait la tâche ${i + 1}` };
+          await run(null, rnd(20, 60), 'TaskCreate', input, `Task #${i + 1} created successfully: ${subject}`, {
+            tool_use_result: { task: { id: String(i + 1), subject } },
+          });
+        }
+        for (let n = 1; n <= titles.length; n++) {
+          await update(n, 'pending', 'in_progress');
+          await work(null);
+          await subagent(n, false);
+          for (let i = rnd(1, 2); i > 0; i--) await work(null);
+          await subagent(n, true);
+          await work(null);
+          await update(n, 'in_progress', 'completed');
+        }
+      }
+    } catch (e) {
+      if (e !== over) throw e;
+    }
+    streamText('Plan terminé');
     result();
   }
 
@@ -829,6 +1199,174 @@ function startSession() {
     });
   }
 
+  // ---------- "sous-agent long", "sous-agent fini" ----------
+
+  // A subagent in the background, as Claude Code 2.1.300 runs one (measured, docs/PROTOCOL.md): its call, its
+  // `task_started`, its launch's result, and the agent's turn ends there. Then its own thread (its frames carry the id of
+  // the call and the `agent_id` of its task): a text, then a command it asks permission for (`can_use_tool` with
+  // `agent_id`). "sous-agent long" then runs until a `stop_task` of its task (see stopTask); "sous-agent fini", once the
+  // permission is answered, hands back its report (`task_notification` with `handback_report`), and Claude Code opens a
+  // turn of its own.
+  function subagentRun(long) {
+    const call = `toolu_sub${++msg}`;
+    const task = long ? 'fakelong-agent' : 'fakedone-agent';
+    const input = long
+      ? {
+          description: 'Surveiller le serveur',
+          subagent_type: 'Explore',
+          model: 'haiku',
+          prompt: 'Surveille le serveur de dev\net dis-moi quand il répond.',
+        }
+      : {
+          description: 'Chercher la cause',
+          subagent_type: 'general-purpose',
+          model: 'sonnet',
+          prompt: 'Cherche pourquoi les PDF sont refusés.',
+        };
+    const sysFrame = (o) => out({ type: 'system', session_id: sessionId, ...o });
+    assistant({ type: 'tool_use', id: call, name: 'Agent', input });
+    sysFrame({
+      subtype: 'task_started',
+      task_id: task,
+      tool_use_id: call,
+      description: input.description,
+      subagent_type: input.subagent_type,
+      is_backgrounded: true,
+      spawn_depth: 1,
+      task_type: 'local_agent',
+      prompt: input.prompt,
+    });
+    toolResult(call, `Async agent launched successfully.\nagentId: ${task} (internal ID)`, {
+      tool_use_result: {
+        isAsync: true,
+        status: 'async_launched',
+        agentId: task,
+        description: input.description,
+        resolvedModel: `claude-${input.model}-5-5`,
+        prompt: input.prompt,
+        canContinueAgent: true,
+      },
+    });
+    streamText('Sous-agent lancé.');
+    result();
+    setTimeout(() => {
+      const thread = (block) =>
+        out({
+          type: 'assistant',
+          message: { id: `msg_${process.pid}_${++msg}`, role: 'assistant', content: [block] },
+          parent_tool_use_id: call,
+          agent_id: task,
+          session_id: sessionId,
+        });
+      thread({ type: 'text', text: long ? 'Je regarde le serveur.' : 'Je lis le filtre des pièces jointes.' });
+      const tuid = `${call}_bash`;
+      const cmd = long
+        ? { command: 'curl localhost:3000', description: 'Interroge le serveur' }
+        : { command: 'grep -n pdf src/filter.ts', description: 'Cherche le filtre' };
+      thread({ type: 'tool_use', id: tuid, name: 'Bash', input: cmd });
+      sysFrame({
+        subtype: 'task_progress',
+        task_id: task,
+        tool_use_id: call,
+        description: `Running ${cmd.description}`,
+        usage: { total_tokens: 1800, tool_uses: 1, duration_ms: 300 },
+        last_tool_name: 'Bash',
+      });
+      pendingAnswer = { id: 'req_subperm', tuid, kind: 'subagent', call, task, long, thread, sysFrame };
+      out({
+        type: 'control_request',
+        request_id: 'req_subperm',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Bash',
+          display_name: 'Bash',
+          input: cmd,
+          description: cmd.description,
+          tool_use_id: tuid,
+          agent_id: task,
+        },
+      });
+      if (long) longAgent = { task, call, description: input.description, sysFrame };
+    }, 150);
+  }
+
+  // The answer to the permission a subagent asked for: its thread goes on.
+  function subagentAnswered(p, r) {
+    const allowed = r.behavior === 'allow';
+    out({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: p.tuid, content: allowed ? 'HTTP 200' : `Refusé : ${r.message}`, is_error: !allowed },
+        ],
+      },
+      parent_tool_use_id: p.call,
+      agent_id: p.task,
+      session_id: sessionId,
+    });
+    if (p.long) {
+      p.thread({ type: 'text', text: allowed ? 'Le serveur répond, je continue de surveiller.' : 'Je ne peux pas interroger le serveur.' });
+      return;
+    }
+    const report =
+      '**Cause trouvée** : le filtre de `src/filter.ts` refuse les PDF.\n\nCorrection proposée : ajouter `application/pdf` à la liste.';
+    p.thread({ type: 'text', text: 'Trouvé : le filtre refuse les PDF.' });
+    p.thread({ type: 'tool_use', id: `${p.call}_hb`, name: 'SubagentHandback', input: { message: report } });
+    p.sysFrame({ subtype: 'task_updated', task_id: p.task, patch: { status: 'completed', end_time: Date.now() } });
+    p.sysFrame({
+      subtype: 'task_notification',
+      task_id: p.task,
+      tool_use_id: p.call,
+      status: 'completed',
+      summary: "This agent's report was delivered to you as a message.",
+      usage: { total_tokens: 4200, tool_uses: 3, duration_ms: 2500 },
+      handback: 'send',
+      handback_report: { text: report },
+      uuid: `notif-${p.call}`,
+    });
+    // Claude Code opens a turn of its own with the report.
+    out({ type: 'system', subtype: 'init', session_id: sessionId, model, cwd: process.cwd(), permissionMode: 'default' });
+    streamText('Rapport reçu.');
+    result();
+  }
+
+  // `stop_task`, as Claude Code 2.1.300 answers it (measured): the task killed and its notification « stopped », then
+  // the answer, then the end of the subagent's thread; Claude Code opens a turn of its own about it. A task it does not
+  // run is an error. A permission the subagent still waits for is cancelled first (measured on 2.1.300 too).
+  function stopTask(id, task) {
+    if (!longAgent || longAgent.task !== task) {
+      return out({ type: 'control_response', response: { subtype: 'error', request_id: id, error: `No task found with ID: ${task}` } });
+    }
+    const { call, description, sysFrame } = longAgent;
+    longAgent = null;
+    if (pendingAnswer?.kind === 'subagent') {
+      out({ type: 'control_cancel_request', request_id: pendingAnswer.id });
+      pendingAnswer = null;
+    }
+    sysFrame({ subtype: 'task_updated', task_id: task, patch: { status: 'killed', end_time: Date.now() } });
+    sysFrame({
+      subtype: 'task_notification',
+      task_id: task,
+      tool_use_id: call,
+      status: 'stopped',
+      output_file: `${task}.output`,
+      summary: description,
+      uuid: `stopped-${task}`,
+    });
+    ok(id);
+    out({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] },
+      parent_tool_use_id: call,
+      agent_id: task,
+      session_id: sessionId,
+    });
+    out({ type: 'system', subtype: 'init', session_id: sessionId, model, cwd: process.cwd(), permissionMode: 'default' });
+    streamText('Le sous-agent a été arrêté.');
+    result();
+  }
+
   function onUser(text) {
     out({ type: 'system', subtype: 'init', session_id: sessionId, model, cwd: process.cwd(), permissionMode: 'default' });
     if (text.includes('[ferme-lentement]')) slowClose = true;
@@ -941,6 +1479,18 @@ function startSession() {
       }, 400);
       return;
     }
+    // Escouade asks the agent to pass a message on to its subagent (« Lui écrire »): it does, with SendMessage.
+    const passOn =
+      /(?:Transmets ce message au sous-agent|Pass this message on to the subagent) .*?\(agentId (\S+)\)[^\n]*\n\n([\s\S]*)$/.exec(text);
+    if (passOn) {
+      const tuid = `toolu_m${msg}`;
+      assistant({ type: 'tool_use', id: tuid, name: 'SendMessage', input: { to: passOn[1], message: passOn[2] } });
+      toolResult(tuid, `Message sent to ${passOn[1]}.`);
+      streamText('Message transmis au sous-agent.');
+      result();
+      return;
+    }
+    if (text.includes('sous-agent long') || text.includes('sous-agent fini')) return subagentRun(text.includes('sous-agent long'));
     if (text.includes('sous-agent')) {
       // A background subagent: launched, then its report and the end of its task are passed on
       // to Claude by Claude Code itself (replayed with their origin), as mid-turn.
@@ -1033,6 +1583,16 @@ function startSession() {
       result();
       return;
     }
+    if (text.includes('flood-real')) {
+      // "flood-real 90s" lasts 90 seconds, a plain "flood-real" 60.
+      floodReal(Number(/flood-real (\d+)s/.exec(text)?.[1] ?? 60) * 1000);
+      return;
+    }
+    if (text.includes('flood')) {
+      // "flood 90s" lasts 90 seconds, a plain "flood" 60.
+      flood(Number(/flood (\d+)s/.exec(text)?.[1] ?? 60) * 1000);
+      return;
+    }
     if (text.includes('slow')) {
       streamText('Je commence…');
       // "slow 3s" ends after 3 seconds, a plain "slow" after 30.
@@ -1048,6 +1608,7 @@ function startSession() {
     const p = pendingAnswer;
     pendingAnswer = null;
     const r = resp.response ?? {};
+    if (p.kind === 'subagent') return subagentAnswered(p, r);
     if (p.kind === 'question') {
       const answers = r.updatedInput?.answers ?? {};
       toolResult(p.tuid, `Réponses : ${JSON.stringify(answers)}`, { tool_use_result: { answers } });
@@ -1082,19 +1643,21 @@ function startSession() {
       const r = m.request;
       switch (r.subtype) {
         case 'initialize':
-          return ok(m.request_id, {
-            commands: [
-              { name: 'compact', description: 'Compacte le contexte', argumentHint: '' },
-              { name: 'review', description: 'Revue de code', argumentHint: '[pr]' },
-            ],
-            // As Claude Code 2.1.284 lists them (abridged): an alias and the model it runs.
-            models: [
-              { value: 'default', resolvedModel: 'claude-opus-5-5', displayName: 'Default (recommended)' },
-              { value: 'sonnet', resolvedModel: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5' },
-              { value: 'claude-fable-5-1', resolvedModel: 'claude-fable-5-1', displayName: 'Fable 5.1' },
-            ],
-            account: {},
-          });
+          return later('initialize', () =>
+            ok(m.request_id, {
+              commands: [
+                { name: 'compact', description: 'Compacte le contexte', argumentHint: '' },
+                { name: 'review', description: 'Revue de code', argumentHint: '[pr]' },
+              ],
+              // As Claude Code 2.1.284 lists them (abridged): an alias and the model it runs.
+              models: [
+                { value: 'default', resolvedModel: 'claude-opus-5-5', displayName: 'Default (recommended)' },
+                { value: 'sonnet', resolvedModel: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5' },
+                { value: 'claude-fable-5-1', resolvedModel: 'claude-fable-5-1', displayName: 'Fable 5.1' },
+              ],
+              account: {},
+            }),
+          );
         case 'get_usage':
           return ok(m.request_id, {
             rate_limits: {
@@ -1104,6 +1667,7 @@ function startSession() {
           });
         case 'interrupt':
           clearTimeout(slowTimer);
+          clearInterval(floodTimer);
           planCut = true;
           if (sys.includes('[fin-d-abord]')) {
             // The app reads the turn's end before the interrupt's answer reaches its caller.
@@ -1114,6 +1678,13 @@ function startSession() {
           return result({ isError: true, subtype: 'error_during_execution' });
         case 'remote_control':
           return remoteControl(m.request_id, r);
+        case 'rename_session':
+          // Logged to <log>.rename.jsonl: the title it is given.
+          fs.appendFileSync(logFile.replace(/\.jsonl$/, '') + '.rename.jsonl', JSON.stringify(r) + '\n');
+          return ok(m.request_id);
+        case 'stop_task':
+          fs.appendFileSync(logFile.replace(/\.jsonl$/, '') + '.control.jsonl', JSON.stringify(r) + '\n');
+          return stopTask(m.request_id, r.task_id);
         default:
           return ok(m.request_id);
       }
@@ -1129,16 +1700,26 @@ function startSession() {
 
   // Remote Control: requests are logged to <log>.control.jsonl. With $FAKE_CLAUDE_REMOTE_MESSAGE,
   // a message "sent from claude.ai" arrives once it is on (replayed with origin human, then run).
+  // As Claude Code does, a session opened with keep_session_on_exit stays on claude.ai when Remote
+  // Control is turned off; one opened with keep_session_on_exit false is archived then (its bridge
+  // id is added to <log>.archived.jsonl).
+  let remoteOn = null;
   function remoteControl(id, r) {
     fs.appendFileSync(logFile.replace(/\.jsonl$/, '') + '.control.jsonl', JSON.stringify(r) + '\n');
     if (!r.enabled) {
+      if (remoteOn && remoteOn.keep === false)
+        fs.appendFileSync(logFile.replace(/\.jsonl$/, '') + '.archived.jsonl', JSON.stringify({ bridge: remoteOn.bridge }) + '\n');
+      remoteOn = null;
       ok(id);
       return out({ type: 'system', subtype: 'bridge_state', state: 'disconnected', session_id: sessionId });
     }
     const bridge = r.reattach_session_id ?? `cse_fake_${process.pid}`;
-    out({ type: 'system', subtype: 'bridge_state', state: 'ready', session_id: sessionId });
-    ok(id, { session_url: `https://claude.ai/code/session_${bridge.slice(4)}`, bridge_session_id: bridge, bridge_epoch: 1 });
-    out({ type: 'system', subtype: 'bridge_state', state: 'connected', bridge_epoch: 1, session_id: sessionId });
+    if (!remoteOn) remoteOn = { bridge, keep: r.keep_session_on_exit !== false };
+    later('remote', () => {
+      out({ type: 'system', subtype: 'bridge_state', state: 'ready', session_id: sessionId });
+      ok(id, { session_url: `https://claude.ai/code/session_${bridge.slice(4)}`, bridge_session_id: bridge, bridge_epoch: 1 });
+      out({ type: 'system', subtype: 'bridge_state', state: 'connected', bridge_epoch: 1, session_id: sessionId });
+    });
     const text = process.env.FAKE_CLAUDE_REMOTE_MESSAGE;
     if (text && !remoteSent) {
       remoteSent = true;

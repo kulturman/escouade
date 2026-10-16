@@ -12,6 +12,7 @@
   import { menu, type MenuItem } from '../lib/menu.svelte';
   import { modelLabel } from '../lib/models';
   import { planView } from '../lib/plan';
+  import { sidebarSubs, type SubRow } from '../lib/subagents';
   import { estimateHint, fSpentUsd, spent } from '../lib/spend';
   import { app } from '../lib/state.svelte';
   import { closeTerminal, newTerminal, SHELL_GLYPH, terminalIn } from '../lib/term-actions';
@@ -39,6 +40,14 @@
   /** The branch picker is open, to choose the branch of a new agent. */
   let pickingBranch = $state(false);
   let renaming = $state<string | null>(null);
+  /** The finished subagents of an agent, unfolded by the reader (folded by default: there can be many). */
+  let finishedOpen = $state<Record<string, boolean>>({});
+  /** The subagents of an agent beyond the first ones of a list, unrolled by the reader: the running, the finished. */
+  let runningAll = $state<Record<string, boolean>>({});
+  let finishedAll = $state<Record<string, boolean>>({});
+  /** How many subagents a list shows before it asks to unroll the others: it never scrolls by itself, inside the list of the agents. */
+  const RUNNING_SHOWN = 5;
+  const FINISHED_SHOWN = 10;
   let renameValue = $state('');
 
   const git = $derived(app.git[project.id]);
@@ -110,15 +119,15 @@
   }
 
   function remoteItems(a: Agent): MenuItem[] {
-    // In Claude Code's own interface, its /remote-control does it.
-    if (a.archived || (a.terminal && !a.remoteControl)) return [];
+    if (a.archived) return [];
     const items: MenuItem[] = [
       { label: '', separator: true },
       a.remoteControl
         ? { label: t('nav.sidebar.menu.remoteOff'), onClick: () => toggleRemote(a) }
         : { label: t('nav.sidebar.menu.remoteOn'), hint: t('nav.sidebar.menu.remoteOnHint'), onClick: () => toggleRemote(a) },
     ];
-    if (a.remoteControl && a.remoteUrl) {
+    // In Claude Code's own interface, the session is the interface's: its link is offered once the interface says it is up.
+    if (a.remoteControl && a.remoteUrl && (!a.terminal || a.remoteState === 'connected')) {
       items.push(
         { label: t('nav.sidebar.menu.openRemote'), onClick: () => openRemote(a) },
         { label: t('nav.sidebar.menu.copyRemoteLink'), onClick: () => copyRemoteLink(a) },
@@ -127,14 +136,32 @@
     return items;
   }
 
-  function remoteTitle(a: Agent) {
-    return t(
-      a.remoteState === 'connected'
-        ? 'nav.sidebar.remote.connected'
-        : a.remoteState === 'ready'
-          ? 'nav.sidebar.remote.connecting'
-          : 'nav.sidebar.remote.waiting',
-    );
+  type RemoteState = 'connected' | 'connecting' | 'waiting' | 'noInterface' | 'nextLaunch' | 'unavailable' | 'stillOn';
+
+  /** The state of the remote control icon of an agent's card, null for none: what its link is, or what keeps it. */
+  function remoteStateOf(a: Agent): RemoteState | null {
+    if (!a.terminal) {
+      if (!a.remoteControl) return null;
+      return a.remoteState === 'connected' ? 'connected' : a.remoteState === 'ready' ? 'connecting' : 'waiting';
+    }
+    // In Claude Code's view the link is the interface's, which Escouade does not drive: what it reports is the state.
+    if (!a.remoteControl) {
+      // Off for Escouade, but the open interface stays linked to claude.ai until its next launch: only if it really is linked.
+      return a.interfaceRemote === true && a.remoteState === 'connected' ? 'stillOn' : null;
+    }
+    // One started before the remote control came on has it only from its next launch.
+    if (a.interfaceRemote === null) return 'noInterface';
+    if (a.interfaceRemote === false) return 'nextLaunch';
+    // Started with it: linked, or not opened by Claude Code (no subscription, network, proxy or policy), or not told yet.
+    return a.remoteState === 'unavailable' ? 'unavailable' : a.remoteState === 'connected' ? 'connected' : 'connecting';
+  }
+
+  /** The state of its link, then what turned it on. */
+  function remoteTitle(a: Agent, state: RemoteState) {
+    const text = t(`nav.sidebar.remote.${state}`);
+    return a.remoteSource
+      ? t('nav.sidebar.remote.withSource', { state: text, source: t(`nav.sidebar.remote.source.${a.remoteSource}`) })
+      : text;
   }
 
   /** Archives the agent; one whose ticket is under way or to test asks first: its ticket starts over from "À faire". */
@@ -199,18 +226,76 @@
     ]);
   }
 
+  /** The agents of the project that have a worktree to open a terminal in (not the archived ones), as the list shows them. */
+  const worktreeAgents = () => app.projectAgents.filter((a) => a.worktree);
+
+  /** The agents whose worktree can hold a terminal, one entry each. */
+  function worktreeMenu() {
+    if (!termMenuBtn || !worktreeAgents().length) return;
+    menu.showAt(
+      termMenuBtn,
+      worktreeAgents().map((a) => ({ label: a.name, onClick: () => terminalIn(project.id, { agentId: a.id }, a.name) })),
+    );
+  }
+
   function shellMenu() {
     if (!termMenuBtn) return;
     if (!app.shells.length) {
       app.toast(t('nav.sidebar.noShell'), 'error');
       return;
     }
-    menu.showAt(
-      termMenuBtn,
-      app.shells.map((s) => ({ label: s.label, hint: SHELL_GLYPH[s.id]?.glyph, onClick: () => newTerminal(project.id, s.id) })),
-    );
+    menu.showAt(termMenuBtn, [
+      ...app.shells.map((s) => ({ label: s.label, hint: SHELL_GLYPH[s.id]?.glyph, onClick: () => newTerminal(project.id, s.id) })),
+      ...(worktreeAgents().length
+        ? [
+            { label: '', separator: true },
+            {
+              label: t('nav.sidebar.inWorktree'),
+              // Once this menu is gone and has given the focus back to the button: the next one takes it from there.
+              onClick: async () => {
+                await tick();
+                worktreeMenu();
+              },
+            },
+          ]
+        : []),
+    ]);
   }
 </script>
+
+<!-- A subagent of the agent `a` under its card: a click opens its conversation in place of the agent's. -->
+{#snippet subRow(a: Agent, s: SubRow)}
+  {@const on = app.subView[a.id] === s.id && a.id === selectedAgentId && !otherView}
+  <li>
+    <button
+      class="sub"
+      class:on
+      aria-current={on ? 'page' : undefined}
+      style:--depth={s.depth}
+      use:tip={{ text: s.title, cut: true }}
+      onclick={() => app.openSubagent(a.id, s.id)}
+    >
+      <span class="sdot {s.status}" aria-hidden="true"></span>
+      <span class="stext">
+        <span class="sline">
+          <span class="stitle">{s.title}</span>
+          {#if s.model}<span class="smodel mono">{modelLabel(s.model, app.models)}</span>{/if}
+          {#if s.status !== 'running'}<span class="sstate">{t(`subagents.status.${s.status}`)}</span>{/if}
+        </span>
+        {#if s.status === 'running' && s.doing}<span class="sdoing">{s.doing}</span>{/if}
+      </span>
+    </button>
+  </li>
+{/snippet}
+
+<!-- The button of a list that shows only its first rows: it unrolls the others, then folds them back (the focus stays). -->
+{#snippet moreRows(all: boolean, label: string, onclick: () => void)}
+  <li>
+    <button class="more-toggle" aria-expanded={all} {onclick}>
+      <span class="chev" aria-hidden="true">{all ? '▾' : '▸'}</span>{all ? t('subagents.lessList') : label}
+    </button>
+  </li>
+{/snippet}
 
 {#snippet browse()}
   <button class="browse" onclick={() => app.openEditor({ projectId: project.id, source: 'project' })}>{t('common.browse')}</button>
@@ -256,6 +341,7 @@
       {@const s = spent(a)}
       {@const tag = ticketTag(app.ticketOf(a.id))}
       {@const plan = planView(a)?.mini}
+      {@const remote = remoteStateOf(a)}
       <div
         class="card"
         class:sel
@@ -286,8 +372,8 @@
           {:else}
             <span class="name" ondblclick={() => startRename(a)} role="presentation">{a.name}</span>
           {/if}
-          {#if a.remoteControl}
-            <span class="rc" class:on={a.remoteState === 'connected'} use:tip={remoteTitle(a)}>
+          {#if remote}
+            <span class="rc" class:on={remote === 'connected'} class:warn={remote === 'stillOn'} use:tip={remoteTitle(a, remote)}>
               <svg
                 width="12"
                 height="12"
@@ -297,7 +383,12 @@
                 stroke-width="2.2"
                 stroke-linecap="round"
                 aria-hidden="true"
-                ><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0" /><circle cx="12" cy="19.5" r="1" fill="currentColor" /></svg
+                ><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0" /><circle
+                  cx="12"
+                  cy="19.5"
+                  r="1"
+                  fill="currentColor"
+                />{#if remote === 'stillOn'}<path class="bar" d="M4 4l16 16" />{/if}</svg
               >
             </span>
           {/if}
@@ -347,6 +438,60 @@
           <div class="ticket-tag mono">▸ {tag}</div>
         {/if}
       </div>
+      {@const subs = sidebarSubs(a)}
+      {#if subs}
+        <!-- Under the card, not in it (the card is a button): its subagents, unfolded while one runs. -->
+        {@const open = app.subsOpen[a.id] ?? subs.running.length > 0}
+        {@const doneOpen = finishedOpen[a.id] ?? false}
+        <div class="subs" class:sel role="group" aria-label={t('subagents.toggle', { name: a.name })}>
+          <button class="subs-toggle" aria-expanded={open} onclick={() => (app.subsOpen[a.id] = !open)}>
+            <span class="chev" aria-hidden="true">{open ? '▾' : '▸'}</span>
+            <span class="lbl">{t('subagents.title')}</span>
+            {#if subs.running.length}<span class="cnt run">{t('subagents.runningCount', { count: subs.running.length })}</span>{/if}
+            {#if subs.finished.length}<span class="cnt">{t('subagents.finishedCount', { count: subs.finished.length })}</span>{/if}
+          </button>
+          {#if open}
+            <!-- The role is said again: a list with no bullets is a list no more for the web views of macOS. -->
+            <!-- svelte-ignore a11y_no_redundant_roles -->
+            <ul class="sub-list" role="list">
+              {#each runningAll[a.id] ? subs.running : subs.running.slice(0, RUNNING_SHOWN) as s (s.id)}
+                {@render subRow(a, s)}
+              {/each}
+              {#if subs.running.length > RUNNING_SHOWN}
+                {@render moreRows(
+                  runningAll[a.id] ?? false,
+                  t('subagents.moreRunning', { count: subs.running.length - RUNNING_SHOWN }),
+                  () => (runningAll[a.id] = !runningAll[a.id]),
+                )}
+              {/if}
+              {#if subs.finished.length}
+                <li class="finished">
+                  <button class="done-toggle" aria-expanded={doneOpen} onclick={() => (finishedOpen[a.id] = !doneOpen)}>
+                    <span class="chev" aria-hidden="true">{doneOpen ? '▾' : '▸'}</span>{t('subagents.finishedToggle', {
+                      count: subs.finished.length,
+                    })}
+                  </button>
+                  {#if doneOpen}
+                    <!-- svelte-ignore a11y_no_redundant_roles -->
+                    <ul class="sub-list done" role="list">
+                      {#each finishedAll[a.id] ? subs.finished : subs.finished.slice(0, FINISHED_SHOWN) as s (s.id)}
+                        {@render subRow(a, s)}
+                      {/each}
+                      {#if subs.finished.length > FINISHED_SHOWN}
+                        {@render moreRows(
+                          finishedAll[a.id] ?? false,
+                          t('subagents.moreFinished', { count: subs.finished.length - FINISHED_SHOWN }),
+                          () => (finishedAll[a.id] = !finishedAll[a.id]),
+                        )}
+                      {/if}
+                    </ul>
+                  {/if}
+                </li>
+              {/if}
+            </ul>
+          {/if}
+        </div>
+      {/if}
     {:else}
       <div class="empty">
         {t('nav.sidebar.empty')}<br />
@@ -664,6 +809,10 @@
   .rc.on {
     color: var(--info);
   }
+  /* Off for Escouade, still linked in the interface left open: barred, in the colour of the other warnings. */
+  .rc.warn {
+    color: var(--wait);
+  }
   .meta {
     display: flex;
     gap: 10px;
@@ -714,6 +863,150 @@
   .plan-text {
     font-size: 10.5px;
     color: var(--muted);
+    white-space: nowrap;
+  }
+  /* The subagents under a card: a line that folds them, then their rows, indented like the card's lines. A list shows its
+     first rows and a button unrolls the others: it never scrolls inside the list of the agents, which scrolls already. */
+  .subs {
+    margin: -2px 0 4px 29px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .subs-toggle,
+  .done-toggle,
+  .more-toggle {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 24px;
+    padding: 0 6px;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 11.5px;
+    text-align: left;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .subs-toggle:hover,
+  .done-toggle:hover,
+  .more-toggle:hover {
+    color: var(--text);
+    background: color-mix(in oklch, var(--elev) 55%, transparent);
+  }
+  .subs-toggle .lbl {
+    font-weight: 600;
+  }
+  .chev {
+    width: 9px;
+    font-size: 10px;
+    color: var(--dim);
+  }
+  .cnt {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--dim);
+  }
+  .cnt.run {
+    color: var(--ok);
+  }
+  .sub-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .sub-list.done {
+    margin-left: 10px;
+  }
+  .finished {
+    display: flex;
+    flex-direction: column;
+  }
+  .sub {
+    width: 100%;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 5px 6px 5px calc(6px + var(--depth, 0) * 12px);
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .sub:hover:not(.on) {
+    background: color-mix(in oklch, var(--elev) 55%, transparent);
+  }
+  .sub.on {
+    background: var(--elev);
+    border-color: var(--line2);
+  }
+  .sub:focus-visible,
+  .subs-toggle:focus-visible,
+  .done-toggle:focus-visible,
+  .more-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .sdot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--dim);
+  }
+  .sdot.running {
+    background: var(--ok);
+  }
+  .sdot.failed {
+    background: var(--del);
+  }
+  .sdot.stopped,
+  .sdot.interrupted {
+    background: var(--wait);
+  }
+  .stext {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1;
+  }
+  .sline {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+  .stitle {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .smodel,
+  .sstate {
+    flex: none;
+    font-size: 10.5px;
+    color: var(--dim);
+  }
+  .sdoing {
+    font-size: 11px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .ticket-tag {

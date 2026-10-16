@@ -21,12 +21,23 @@ export default defineZone('nav', {
       connected: 'Remote control: connected (reachable from claude.ai and the Claude app)',
       connecting: 'Remote control: connecting… (reachable from claude.ai and the Claude app)',
       waiting: 'Remote control: waiting for a connection (reachable from claude.ai and the Claude app)',
+      noInterface: 'Remote control: no interface running, not reachable for now (open the agent to start it)',
+      nextLaunch: 'Remote control: from the next launch of its Claude Code interface',
+      unavailable: 'Remote control: not opened by Claude Code (no claude.ai subscription, network, proxy or organization policy)',
+      stillOn: 'Remote control still on in the open interface, until its next launch (its /remote-control command turns it off)',
+      withSource: '{state} · {source}',
+      source: {
+        hand: 'turned on by hand',
+        project: 'turned on by the project’s setting',
+        global: 'turned on by the setting for all agents',
+      },
     },
     terminals: 'Terminals',
     newTerminal: 'New terminal',
     noTerminals: 'No open terminals',
     exited: 'exited',
     noShell: 'No shell found (PowerShell 7, Git Bash, WSL). Check the settings.',
+    inWorktree: 'In the worktree of…',
     modified: '~{n} modified',
     added: '+{n} added',
     deleted: '−{n} deleted',
@@ -90,7 +101,8 @@ export default defineZone('nav', {
   project: {
     closeTitle: 'Close “{name}”?',
     closeBody:
-      'The project and its agents are removed from the app (conversations included). The files and worktrees on disk are not touched.',
+      'The project leaves the app: its agents, terminals and launches stop. Its history (conversations, tickets, settings) is kept: adding this folder again brings it back. The files and worktrees on disk are not touched.',
     closeConfirm: 'Close the project',
+    closeErase: 'Also erase its history (conversations, tickets, settings)',
   },
 });

@@ -79,6 +79,9 @@ pub struct Settings {
     pub voice_model: String,
     /// « Dictée › Langue parlée »: `ui` (the interface's), `auto` (detected) or a language code.
     pub voice_language: String,
+    /// « Remote control pour tous les agents »: every agent, those of tickets too, is reachable
+    /// from claude.ai (`AgentMeta::remote_control`, `RemoteSource::Global`).
+    pub remote_control_all: bool,
 }
 
 /// A Claude account: Claude Code with a configuration folder of its own (`accounts`).
@@ -270,6 +273,7 @@ impl Default for Settings {
             telemetry: None,
             voice_model: crate::voice::models::DEFAULT_MODEL.into(),
             voice_language: "ui".into(),
+            remote_control_all: false,
         }
     }
 }
@@ -322,6 +326,10 @@ pub struct Project {
     /// « Préfixe des branches des tickets »: a ticket's own branch is `<prefix><key>`.
     #[serde(default = "default_ticket_branch_prefix")]
     pub ticket_branch_prefix: String,
+    /// « Remote control pour les agents de ce projet »: its agents, those of tickets too, are
+    /// reachable from claude.ai (`RemoteSource::Project`).
+    #[serde(default)]
+    pub remote_control: bool,
 }
 
 impl Project {
@@ -563,6 +571,10 @@ pub struct Ticket {
     /// is quoted then).
     pub outcome_claude: Option<String>,
     pub outcome_url: Option<String>,
+    /// The commit its merge made on the target (the merge commit, the squash commit, or the last
+    /// commit rebased); None when it was not merged (pull request, push, kept, nothing to merge)
+    /// or before 1.8.
+    pub outcome_commit: Option<String>,
     /// "Lancer" was clicked while the autopilot is off.
     pub forced: bool,
     /// Its agent was reminded once to end with its report.
@@ -579,6 +591,30 @@ pub struct Ticket {
     /// local one or a remote one (`origin/feat`); empty: its own branch, `ticket/<key>`, made at
     /// its start.
     pub branch: String,
+    /// The model and the effort of this ticket's agent alone, given by `start_ticket` (the MCP
+    /// tool); empty: the board's.
+    pub model: String,
+    pub effort: String,
+    /// Its agent was set apart from Remote Control by hand (`AgentMeta::remote_off`): so is the
+    /// next one it gets (sent back to do and started again), until the user turns Remote Control
+    /// on for one by hand.
+    pub remote_off: bool,
+    /// The images pasted or dropped in its form, in their order: files of its folder
+    /// (`DataDir::ticket_dir`), sent to its agent with its first message.
+    pub images: Vec<TicketImage>,
+}
+
+/// An image of a ticket: its content is a file of the ticket's folder, never in the JSON of the
+/// tickets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TicketImage {
+    /// As it was pasted or dropped (« image.png »).
+    pub name: String,
+    /// One of the image types the API reads.
+    pub media_type: String,
+    /// Its file's name in the ticket's folder.
+    pub file: String,
 }
 
 /// A project's board: what validating a ticket does, and its agents.
@@ -633,6 +669,15 @@ impl Default for BoardSettings {
             prefix: String::new(),
             next_number: 1,
         }
+    }
+}
+
+impl BoardSettings {
+    /// Whether the tests run again before a ticket is approved: tests first is on, with a test
+    /// command to run (one that is empty is no command: the window shows tests first off, and the
+    /// validation skips it).
+    pub fn tests_first_on(&self) -> bool {
+        self.tests_first && !self.test_command.trim().is_empty()
     }
 }
 
@@ -732,6 +777,18 @@ pub struct Worktree {
     pub existing: bool,
 }
 
+/// Where an agent's Remote Control comes from (`AgentMeta::remote_source`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteSource {
+    /// Turned on for this agent, from its menu.
+    Hand,
+    /// The project's setting.
+    Project,
+    /// The global setting.
+    Global,
+}
+
 /// The longest status line an agent reports (`AgentMeta::progress_line`), in characters.
 pub const PROGRESS_LINE_MAX: usize = 120;
 
@@ -768,9 +825,17 @@ pub struct AgentMeta {
     pub touched_files: Vec<String>,
     pub last_activity: i64,
     pub prompts: u32,
-    /// Remote Control on: the session is also reachable from claude.ai / the Claude app, so the
-    /// agent's process stays up (started with the app, never idle-stopped).
+    /// Remote Control in force now, whatever it comes from (`remote_source`): the session is also
+    /// reachable from claude.ai / the Claude app, so the agent's process stays up (started with
+    /// the app, never idle-stopped).
     pub remote_control: bool,
+    /// Where the Remote Control in force comes from: the user's choice for this agent, its
+    /// project's setting or the global one. None while it is not in force.
+    pub remote_source: Option<RemoteSource>,
+    /// Set apart by hand (« Désactiver le remote control », whether a setting covered it then or
+    /// not): the settings give it none, restarts included, until the user turns it on for this
+    /// agent. Its copies and, for a ticket's agent, the ticket's next agents are set apart too.
+    pub remote_off: bool,
     /// Remote session to reattach to when the process restarts, and its claude.ai link.
     pub remote_session: Option<String>,
     pub remote_url: Option<String>,
@@ -898,11 +963,30 @@ pub struct AgentView {
     pub activity: Option<String>,
     /// The terminal of Claude Code's interface running for it (« Vue Claude Code »).
     pub terminal_id: Option<String>,
+    /// Its interface runs (Claude Code view) and was started with Remote Control or not; None: no
+    /// interface runs.
+    pub interface_remote: Option<bool>,
+    /// How the last interface it ran ended, until the next one starts (not saved).
+    pub tui_exit: Option<TuiExit>,
     /// The setup of its new worktree under way: the command running ("npm ci (1/2)").
     pub setup: Option<String>,
     /// isola runs its worktree's services (installed, and an `.isola.toml` in the worktree): its
     /// test launches go through it, with no recipe nor reserved ports.
     pub isola: bool,
+}
+
+/// How Claude Code's interface of an agent ended (« Vue Claude Code »), as the window reads it to
+/// decide whether to start it again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TuiExit {
+    /// Its exit code; None when it was killed.
+    pub code: Option<u32>,
+    /// It stopped soon after it started, and not by the user's wish (`/exit`, code 0).
+    pub quick: bool,
+    /// Claude Code refused the session to resume (« No conversation found »), at once: the agent's
+    /// session was given up, its next start is a new one.
+    pub session_lost: bool,
 }
 
 /// How many of the last lines of the step running a worktree's setup keeps for the window.
@@ -983,6 +1067,10 @@ pub struct PersistedState {
     pub tickets: Vec<Ticket>,
     /// The autopilot's pause as the app stopped: the next start holds the tickets back the same.
     pub pause: SavedPause,
+    /// The closed projects' histories (by project id) the state holds the truth of, whose file
+    /// could not be removed: given back to their project, or erased. The next start tries again
+    /// to remove them, and never reads them (`closed::scan`).
+    pub leftover_histories: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -2290,6 +2378,28 @@ mod tests {
             back.outcome_claude.as_deref(),
             Some("⤵ Merged into main · squash")
         );
+    }
+
+    #[test]
+    fn a_ticket_done_before_1_8_has_no_merge_commit_and_one_kept_is_saved_and_read_back() {
+        // A state.json of 1.7: its done tickets have an `outcome` and no commit.
+        let s: PersistedState = serde_json::from_value(json!({
+            "projects": [],
+            "tickets": [{
+                "id": "t1", "projectId": "p1", "key": "DEM-1", "column": "done",
+                "outcome": "⤵ Mergé dans main · squash"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(s.tickets[0].outcome_commit, None);
+        let v = serde_json::to_value(Ticket {
+            outcome_commit: Some("0a1b2c".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(v["outcomeCommit"], json!("0a1b2c"));
+        let back: Ticket = serde_json::from_value(v).unwrap();
+        assert_eq!(back.outcome_commit.as_deref(), Some("0a1b2c"));
     }
 
     #[test]

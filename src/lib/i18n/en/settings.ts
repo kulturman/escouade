@@ -93,6 +93,10 @@ export default defineZone('settings', {
     todoTools: 'Agents keep a task list',
     todoToolsDesc:
       'Gives agents Claude Code’s task list tool: if they keep a list, Escouade shows their progress in the “Plan” banner (the model does not have to use it). Applies to agents started afterwards.',
+    remoteTitle: 'Remote control',
+    remoteAll: 'Remote control for all agents',
+    remoteAllDesc:
+      'Every agent of every project, existing or new (ticket agents included), is reachable from claude.ai and the Claude app. Escouade starts each one’s claude process right away, and it stays running. The session appears on claude.ai as “project · agent” (for a ticket agent, the name comes from the ticket). In Claude Code view, an interface that is already open only picks it up at its next launch. To set an agent apart: right-click, “Turn off remote control”.',
   },
 
   notifications: {
@@ -159,6 +163,11 @@ export default defineZone('settings', {
     identity: 'Identity',
     nameLabel: 'Project name',
     colorN: 'Color {n}',
+    remoteTitle: 'Remote control',
+    remote: 'Remote control for this project’s agents',
+    remoteDesc:
+      'Every agent of this project, existing or new (ticket agents included), is reachable from claude.ai and the Claude app. Escouade starts each one’s claude process right away, and it stays running. The session appears on claude.ai as “project · agent” (for a ticket agent, the name comes from the ticket). In Claude Code view, an interface that is already open only picks it up at its next launch. To set an agent apart: right-click, “Turn off remote control”.',
+    remoteGlobal: 'On for all projects in Settings › Claude Code',
     worktreePerAgent: 'One worktree per agent',
     worktreePerAgentDesc: 'Keeps each new agent’s changes in its own branch.',
     worktreeDir: 'Worktrees folder',
@@ -219,8 +228,25 @@ export default defineZone('settings', {
     danger: 'Danger zone',
     close: 'Close the project',
     closeDesc:
-      'The project and its agents are removed from the app, conversations included. The files and worktrees on disk are not touched.',
+      'The project leaves the app: its agents, terminals and launches stop. Its history (conversations, tickets, settings) is kept: adding this folder again brings it back. The files and worktrees on disk are not touched.',
     closeButton: 'Close the project…',
+  },
+
+  closed: {
+    title: 'Closed projects',
+    note: 'Their history is kept: adding a project in their folder brings it back.',
+    detail: '{size} · last activity on {date}',
+    erase: 'Erase history…',
+    eraseTitle: 'Erase the history of “{name}”?',
+    eraseBody: 'Its conversations, tickets, and settings are erased for good. The files and worktrees on disk are not touched.',
+    eraseConfirm: 'Erase history',
+    reopen: 'Reopen',
+    unreadable: 'Unreadable history',
+    eraseFile: 'Erase',
+    eraseFileTitle: 'Erase the file “{file}”?',
+    eraseFileBody:
+      'This file, which the app cannot read, is erased for good. The other histories, and the files and worktrees on disk, are not touched.',
+    eraseFileConfirm: 'Erase the file',
   },
 
   steps: {

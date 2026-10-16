@@ -3,6 +3,7 @@
 //! by its last message (cut) and the files it edited. The requests that wait for an answer
 //! (`requests`) are the agents' own, as their cards in the conversation have them.
 
+use super::images::{self, ImageView};
 use super::resolve;
 use super::tools::ToolError;
 use super::Caller;
@@ -11,8 +12,8 @@ use crate::agent::{AgentRt, Waiting};
 use crate::core::Core;
 use crate::git;
 use crate::model::{
-    AgentStatus, Column, Criterion, PauseReason, PendingView, RateWindow, Service, Ticket,
-    MAX_PENDING_FIELD, MAX_PENDING_ITEMS,
+    AgentMeta, AgentStatus, Column, Criterion, PauseReason, PendingView, Project, RateWindow,
+    RemoteSource, Service, Ticket, MAX_PENDING_FIELD, MAX_PENDING_ITEMS,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -45,6 +46,63 @@ struct ProjectRow {
     /// Not archived.
     agents: usize,
     tickets: ColumnCounts,
+    /// The project's Remote Control setting (« Remote control pour les agents de ce projet »).
+    remote_control: bool,
+    /// The global one (« Remote control pour tous les agents »), the same on every row. Read
+    /// only: no tool changes either.
+    remote_control_all: bool,
+}
+
+/// Where the Remote Control of an agent comes from, as the tools say it: the three sources
+/// (`RemoteSource`) while it is in force, `Off` for an agent the user set apart by hand.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum RemoteFrom {
+    Hand,
+    Project,
+    Global,
+    Off,
+}
+
+/// An agent's Remote Control as the window has it, read only (`list_agents` and
+/// `get_agent_summary` flatten it into their answers).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteRead {
+    /// In force now: the session is reachable from claude.ai.
+    remote_control: bool,
+    /// What turned it on while it is; `off` when the user set the agent apart (no setting gives it
+    /// Remote Control again until they turn it on by hand); None otherwise.
+    remote_source: Option<RemoteFrom>,
+    /// The link's state Claude Code reports ("ready", "connected", "unavailable"), None without
+    /// one.
+    remote_state: Option<String>,
+    /// In the Claude Code view, its interface runs and was started with Remote Control (so it is
+    /// linked to claude.ai until its next launch, whatever the agent's Remote Control says now);
+    /// false: it runs without; None: none runs.
+    interface_remote: Option<bool>,
+}
+
+impl RemoteRead {
+    /// From what the window reads of the agent: its saved state (`AgentMeta`), the link state of
+    /// its process and whether its interface (if one runs) was started with Remote Control.
+    fn of(meta: &AgentMeta, state: Option<&str>, interface: Option<bool>) -> Self {
+        let source = if meta.remote_control {
+            meta.remote_source.map(|s| match s {
+                RemoteSource::Hand => RemoteFrom::Hand,
+                RemoteSource::Project => RemoteFrom::Project,
+                RemoteSource::Global => RemoteFrom::Global,
+            })
+        } else {
+            meta.remote_off.then_some(RemoteFrom::Off)
+        };
+        Self {
+            remote_control: meta.remote_control,
+            remote_source: source,
+            remote_state: state.map(str::to_string),
+            interface_remote: interface,
+        }
+    }
 }
 
 #[derive(Serialize, Default)]
@@ -70,6 +128,8 @@ impl ColumnCounts {
 pub(super) async fn projects<R: Runtime>(core: &Core<R>) -> Result<String, ToolError> {
     // One lock at a time (the order is projects before tickets, see `Core`).
     let projects = core.projects.read().clone();
+    // The settings' lock after the projects' one is released: never two at a time.
+    let remote_all = core.settings.read().remote_control_all;
     let mut tickets: HashMap<String, ColumnCounts> = HashMap::new();
     for t in core.tickets.read().iter() {
         tickets
@@ -100,6 +160,8 @@ pub(super) async fn projects<R: Runtime>(core: &Core<R>) -> Result<String, ToolE
             branch: branch.filter(|b| !b.is_empty() && b != "(detached)"),
             agents: agents.get(&p.id).copied().unwrap_or(0),
             tickets: tickets.remove(&p.id).unwrap_or_default(),
+            remote_control: p.remote_control,
+            remote_control_all: remote_all,
             id: p.id,
             name: p.name,
             path: p.path,
@@ -128,6 +190,8 @@ struct AgentRow {
     account: String,
     /// In US dollars, its running turn included.
     cost: f64,
+    #[serde(flatten)]
+    remote: RemoteRead,
 }
 
 /// `list_agents`: the agents not archived, oldest first, of every project or of `project`.
@@ -150,6 +214,7 @@ pub(super) fn agents<R: Runtime>(
         .filter(|v| !v.meta.archived)
         .filter(|v| scope.as_ref().is_none_or(|p| v.meta.project_id == p.id))
         .map(|v| AgentRow {
+            remote: RemoteRead::of(&v.meta, v.remote_state.as_deref(), v.interface_remote),
             project: projects
                 .get(&v.meta.project_id)
                 .cloned()
@@ -288,7 +353,53 @@ pub(crate) struct TicketView {
     after: Vec<String>,
     /// The features in place so far, as its agent last listed them.
     progress: Vec<String>,
+    /// Its images, in its order: pasted in its window or attached by the tools; its agent gets
+    /// them with its first message, and `get_ticket_image` gives one back.
+    images: Vec<ImageView>,
+    /// The model and effort of its agent alone (`start_ticket` gave them); left out when it has
+    /// none of its own, the board's being its agent's.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    model: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    effort: String,
     external: Option<External>,
+    /// Its agent: None before it starts, and still named once the ticket is done (archived).
+    agent: Option<TicketAgent>,
+    /// Its agent's branch, else the existing one it takes up; None before its agent starts. Kept
+    /// once the ticket is done.
+    branch: Option<String>,
+    /// Its agent's worktree, kept once the ticket is done even when the cleanup removed it.
+    worktree: Option<String>,
+    /// Why it no longer moves on by itself.
+    blocked: Option<String>,
+    /// The block is a merge conflict, which `resolve_conflict` hands to its agent.
+    conflict: bool,
+    /// The validation step running (« Validation… » or « Approving… », the first being stored in
+    /// the interface's language of the moment, « Tests… », « Commit… », « Merge… », « Push… »):
+    /// None when no approval runs.
+    step: Option<String>,
+    /// What its approval did, once it is done.
+    outcome: Option<Outcome>,
+}
+
+/// A ticket's agent, as `get_ticket` sums it up.
+#[derive(Serialize)]
+struct TicketAgent {
+    id: String,
+    /// None, with the status, for an agent that no longer exists.
+    name: Option<String>,
+    status: Option<AgentStatus>,
+    /// How many requests wait for an answer, as `list_agents` counts them.
+    requests: usize,
+}
+
+/// What a ticket's approval did: what the card says, the pull request it opened, the commit it
+/// made on the target.
+#[derive(Serialize)]
+struct Outcome {
+    text: String,
+    url: Option<String>,
+    commit: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -308,15 +419,35 @@ struct External {
     error: Option<String>,
 }
 
-/// `t` as `get_ticket` answers it. Reads the tickets (the keys of those it comes after): never
-/// call it with the tickets' lock held (a write one would deadlock, a read one too behind a
-/// writer waiting for it).
+/// `t` as `get_ticket` answers it. Reads the tickets (the keys of those it comes after) and its
+/// agent: never call it with the tickets' lock held (a write one would deadlock, a read one too
+/// behind a writer waiting for it), nor with that agent's. It also looks at the size of each
+/// image's file (20 at most).
 pub(crate) fn ticket_view<R: Runtime>(core: &Core<R>, t: &Ticket) -> TicketView {
     let keys = ticket_keys(core);
     let keys: HashMap<&str, &str> = keys
         .iter()
         .map(|(id, key)| (id.as_str(), key.as_str()))
         .collect();
+    let mut worktree = None;
+    let agent = t.agent_id.as_ref().map(|id| {
+        let Ok(h) = core.agent(id) else {
+            return TicketAgent {
+                id: id.clone(),
+                name: None,
+                status: None,
+                requests: 0,
+            };
+        };
+        let rt = h.lock();
+        worktree = rt.meta.worktree.clone();
+        TicketAgent {
+            id: id.clone(),
+            name: Some(rt.meta.name.clone()),
+            status: Some(rt.meta.status),
+            requests: answerable_views(&rt).count(),
+        }
+    });
     TicketView {
         id: t.id.clone(),
         key: t.key.clone(),
@@ -330,11 +461,28 @@ pub(crate) fn ticket_view<R: Runtime>(core: &Core<R>, t: &Ticket) -> TicketView 
         column: t.column,
         after: after_keys(t, &keys),
         progress: t.progress.clone(),
+        images: images::listed(&core.data.ticket_dir(&t.id), &t.images),
+        model: t.model.clone(),
+        effort: t.effort.clone(),
         external: t.external.as_ref().map(|e| External {
             service: e.service,
             key: e.key.clone(),
             url: e.url.clone(),
             error: e.error.clone(),
+        }),
+        agent,
+        branch: worktree
+            .as_ref()
+            .map(|w| w.branch.clone())
+            .or_else(|| Some(t.branch.clone()).filter(|b| !b.is_empty())),
+        worktree: worktree.map(|w| w.path),
+        blocked: t.blocked.clone(),
+        conflict: t.conflict,
+        step: t.step.clone(),
+        outcome: t.outcome.as_ref().map(|text| Outcome {
+            text: text.clone(),
+            url: t.outcome_url.clone(),
+            commit: t.outcome_commit.clone(),
         }),
     }
 }
@@ -352,8 +500,91 @@ pub(super) fn ticket<R: Runtime>(
     json(&ticket_view(core, &t))
 }
 
+/// A project's Kanban settings, as `get_board` answers them (and `set_board` after a change): the
+/// names `SetBoardArgs` takes, so that the answer can be given back as it is.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BoardView {
+    project: String,
+    /// Its id, which names it too (`set_board` takes either, and ignores this key).
+    project_id: String,
+    /// "merge", "pr", "push" or "keep".
+    action: String,
+    /// Where tickets merge: the Kanban's, else the branch the project is on (empty on a detached
+    /// HEAD).
+    target: String,
+    /// "merge", "squash" or "rebase".
+    strategy: String,
+    draft: bool,
+    cleanup: bool,
+    conventional: bool,
+    /// "ask", "agent" or "abort".
+    conflict: String,
+    max_parallel: u32,
+    autopilot: bool,
+    /// What the Kanban sets for its tickets' agents; empty: the app's (`defaults`).
+    model: String,
+    effort: String,
+    mode: String,
+    defaults: BoardDefaults,
+    /// On only with a test command, as the window shows it.
+    tests_first: bool,
+    test_command: String,
+    prefix: String,
+}
+
+/// What the tickets' agents go with when the Kanban sets nothing: the app's defaults.
+#[derive(Serialize)]
+struct BoardDefaults {
+    model: String,
+    effort: String,
+    mode: String,
+}
+
+/// `project`'s Kanban settings as `get_board` answers them. Async for the branch the project is
+/// on, which is the target while the Kanban has none (the first ticket fixes it).
+pub(crate) async fn board_view<R: Runtime>(core: &Core<R>, project: &Project) -> BoardView {
+    let b = &project.board;
+    let target = if b.target.is_empty() {
+        git::head_branch(&project.path).await
+    } else {
+        b.target.clone()
+    };
+    let settings = core.settings.read();
+    BoardView {
+        project: project.name.clone(),
+        project_id: project.id.clone(),
+        action: b.action.clone(),
+        target,
+        strategy: b.strategy.clone(),
+        draft: b.draft,
+        cleanup: b.cleanup,
+        conventional: b.conventional,
+        conflict: b.conflict.clone(),
+        max_parallel: b.max_parallel.clamp(1, 6),
+        autopilot: b.autopilot,
+        model: b.model.clone(),
+        effort: b.effort.clone(),
+        mode: b.mode.clone(),
+        defaults: BoardDefaults {
+            model: settings.default_model.clone(),
+            effort: settings.default_effort.clone(),
+            mode: settings.default_mode.clone(),
+        },
+        tests_first: b.tests_first_on(),
+        test_command: b.test_command.clone(),
+        prefix: b.prefix.clone(),
+    }
+}
+
+/// `get_board`: the Kanban settings of `project`.
+pub(super) async fn board<R: Runtime>(core: &Core<R>, project: &str) -> Result<String, ToolError> {
+    let project = resolve::project(core, project)?;
+    json(&board_view(core, &project).await)
+}
+
 /// The ticket the calling agent works on. Claude outside Escouade has none.
-fn own_ticket<R: Runtime>(core: &Core<R>, caller: &Caller) -> Result<Ticket, ToolError> {
+pub(super) fn own_ticket<R: Runtime>(core: &Core<R>, caller: &Caller) -> Result<Ticket, ToolError> {
     let Caller::Agent(id) = caller else {
         return Err(ToolError::Refused(tr!(
             "Donne la clé ou l’id du ticket : seul un agent d’Escouade lit le sien sans le nommer.",
@@ -447,6 +678,8 @@ struct Summary {
     /// order they came.
     requests: usize,
     waiting_for: Vec<&'static str>,
+    #[serde(flatten)]
+    remote: RemoteRead,
 }
 
 /// `get_agent_summary`: the agent `agent` names (in `project` when given), summed up.
@@ -483,6 +716,11 @@ pub(super) fn agent_summary<R: Runtime>(
             touched_files: files[from..].to_vec(),
             requests: asked.len(),
             waiting_for: asked,
+            remote: RemoteRead::of(
+                &rt.meta,
+                rt.remote_state.as_deref(),
+                rt.tui.as_ref().map(|t| t.remote),
+            ),
         };
         (summary, rt.meta.ticket_id.clone())
     };

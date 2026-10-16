@@ -51,6 +51,29 @@ describe('TicketCard', () => {
     expect(items[1]).toHaveTextContent('○Tests verts');
   });
 
+  it('shows a paperclip and the number of its images, in every column, and nothing without any', () => {
+    fakeBackend();
+    const images = [
+      { file: 'a1.png', name: 'capture.png', mediaType: 'image/png' },
+      { file: 'b2.gif', name: 'schema.gif', mediaType: 'image/gif' },
+    ];
+    const card = () => screen.getByRole('button', { name: 'DEM-1 Ajouter le fichier' });
+    const { unmount } = show(ticket({ images }));
+    // The card is a button named after its key and title: the count is its description, for a screen reader to say it.
+    expect(card()).toHaveAccessibleDescription('2 images jointes');
+    const clip = card().querySelector('.clip')!;
+    expect(clip).toHaveAttribute('data-tip', '2 images jointes');
+    expect(clip.querySelector('svg')).not.toBeNull();
+    expect(clip.querySelector('.mono')).toHaveTextContent('2');
+    unmount();
+    const under = show(doing({ images: images.slice(1) }));
+    expect(card()).toHaveAccessibleDescription('1 image jointe');
+    under.unmount();
+    show(ticket());
+    expect(card()).not.toHaveAttribute('aria-describedby');
+    expect(card().querySelector('.clip')).toBeNull();
+  });
+
   it('shows the line its agent reported, with what it does right now, until it reports another', () => {
     resetApp({ agents: [agent({ status: 'running', activity: 'Lit src/db.ts', progressLine: 'Écrit les tests du parseur' })] });
     fakeBackend();
@@ -253,6 +276,36 @@ describe('TicketCard', () => {
     expect(backend.called('ticket_delete')).toEqual([]);
     await (app.modal as any).onConfirm(false);
     expect(backend.called('ticket_delete')).toEqual([{ cmd: 'ticket_delete', args: { id: 't1' } }]);
+  });
+
+  describe('deleting a ticket that has images', () => {
+    const IMAGES = [
+      { file: 'a1.png', name: 'capture.png', mediaType: 'image/png' },
+      { file: 'b2.gif', name: 'schema.gif', mediaType: 'image/gif' },
+    ];
+    /** The body of the confirmation the menu's « Supprimer » opens for this ticket. */
+    async function bodyFor(t: Ticket) {
+      fakeBackend();
+      show(t);
+      await fireEvent.contextMenu(screen.getByRole('button', { name: /DEM-1/ }));
+      menu.open!.items.find((i) => i.label === 'Supprimer')!.onClick!();
+      return (app.modal as { body: string }).body;
+    }
+
+    it.each([
+      [1, 'Le ticket, sa description et son image sont supprimés.'],
+      [2, 'Le ticket, sa description et ses 2 images sont supprimés.'],
+    ])('says with %i image(s) that they go with the ticket', async (count, body) => {
+      expect(await bodyFor(ticket({ images: IMAGES.slice(0, count) }))).toBe(body);
+    });
+
+    it.each([
+      [1, 'Le ticket, sa description et son image sont supprimés. Il ne sera plus importé depuis Jira.'],
+      [2, 'Le ticket, sa description et ses 2 images sont supprimés. Il ne sera plus importé depuis Jira.'],
+    ])('says it as well, with %i image(s), for a ticket imported from a service', async (count, body) => {
+      const external = { service: 'jira' as const, id: 'ATL-1', key: 'ATL-1', container: 'ATL', url: 'https://a.test/ATL-1', error: null };
+      expect(await bodyFor(ticket({ images: IMAGES.slice(0, count), external }))).toBe(body);
+    });
   });
 
   it('deletes a finished ticket from its menu without asking', async () => {
@@ -699,6 +752,105 @@ describe('TicketCard foot', () => {
   });
 });
 
+// A ticket that has its own model or effort (the MCP `start_ticket` sets them) says so on every card: they come before
+// the Kanban's for its agent.
+describe('TicketCard with a model or an effort of its own', () => {
+  beforeEach(() => resetApp({ agents: [agent({ status: 'running' })] }));
+
+  const own = (container: HTMLElement) => container.querySelector<HTMLElement>('.top .own');
+
+  it('shows the model and the effort next to the key, with what they are in a tooltip and for a screen reader', () => {
+    fakeBackend();
+    const { container } = show(ticket({ model: 'opus', effort: 'max' }));
+    const label = 'Modèle de ce ticket : Opus, effort Max (avant celui du Kanban)';
+    const chip = screen.getByLabelText(label);
+    expect(chip).toHaveTextContent('Opus · Max');
+    expect(chip).toHaveAttribute('data-tip', label);
+    expect(own(container)).toBe(chip);
+  });
+
+  it('shows the version Claude Code runs for the model once it told', () => {
+    app.models = [{ value: 'opus', resolvedModel: 'claude-opus-5-5' }];
+    fakeBackend();
+    show(ticket({ model: 'opus' }));
+    expect(screen.getByLabelText('Modèle de ce ticket : Opus 5.5 (avant celui du Kanban)')).toHaveTextContent('Opus 5.5');
+  });
+
+  it('shows only the one it has: the model, or the effort', () => {
+    fakeBackend();
+    const { unmount } = show(ticket({ model: 'sonnet' }));
+    expect(screen.getByLabelText('Modèle de ce ticket : Sonnet (avant celui du Kanban)')).toHaveTextContent(/^Sonnet$/);
+    unmount();
+    show(ticket({ effort: 'xhigh' }));
+    expect(screen.getByLabelText('Effort de ce ticket : Très élevé (avant celui du Kanban)')).toHaveTextContent(/^Très élevé$/);
+  });
+
+  it('shows nothing when the ticket follows the Kanban', () => {
+    fakeBackend();
+    const { container } = show(ticket());
+    expect(own(container)).toBeNull();
+    expect(screen.queryByLabelText(/de ce ticket/)).not.toBeInTheDocument();
+  });
+
+  it('shows it in every column, the first line of the card', () => {
+    resetApp({ agents: [agent({ id: 'a1', ticketId: 't1', status: 'done' })] });
+    fakeBackend();
+    for (const column of ['todo', 'doing', 'review', 'done'] as const) {
+      const { container, unmount } = show(doing({ column, model: 'opus', effort: 'low' }));
+      expect(own(container), column).toHaveTextContent('Opus · Bas');
+      unmount();
+    }
+  });
+
+  // Haiku takes no effort: its agent starts without one, so the card does not claim one (the ticket's model, else the
+  // Kanban's, else the app's is the model its agent runs).
+  it('leaves the effort out when the model of its agent takes none: its own Haiku', () => {
+    fakeBackend();
+    const { container } = show(ticket({ model: 'haiku', effort: 'max' }));
+    const chip = screen.getByLabelText('Modèle de ce ticket : Haiku (avant celui du Kanban)');
+    expect(chip).toHaveTextContent(/^Haiku$/);
+    expect(chip).toHaveAttribute('data-tip', 'Modèle de ce ticket : Haiku (avant celui du Kanban)');
+    expect(own(container)).toBe(chip);
+    expect(screen.queryByLabelText(/effort/)).not.toBeInTheDocument();
+  });
+
+  it('shows nothing for an effort alone when the Kanban is on Haiku', () => {
+    fakeBackend();
+    const { container } = show(ticket({ effort: 'max' }), project({ board: board({ model: 'haiku' }) }));
+    expect(own(container)).toBeNull();
+    expect(screen.queryByLabelText(/de ce ticket/)).not.toBeInTheDocument();
+  });
+
+  it('shows nothing for an effort alone when the Kanban follows an app on Haiku', () => {
+    app.settings.defaultModel = 'haiku';
+    fakeBackend();
+    const { container } = show(ticket({ effort: 'max' }));
+    expect(own(container)).toBeNull();
+  });
+
+  it('keeps the effort when the model of its agent takes one: its own model over a Kanban on Haiku, a Kanban on Opus', () => {
+    fakeBackend();
+    const { unmount } = show(ticket({ model: 'sonnet', effort: 'max' }), project({ board: board({ model: 'haiku' }) }));
+    expect(screen.getByLabelText('Modèle de ce ticket : Sonnet, effort Max (avant celui du Kanban)')).toHaveTextContent('Sonnet · Max');
+    unmount();
+    show(ticket({ effort: 'high' }), project({ board: board({ model: 'opus' }) }));
+    expect(screen.getByLabelText('Effort de ce ticket : Élevé (avant celui du Kanban)')).toHaveTextContent(/^Élevé$/);
+  });
+
+  it('knows a full Haiku id for Haiku too', () => {
+    fakeBackend();
+    const { container } = show(ticket({ model: 'claude-haiku-4-5', effort: 'low' }));
+    expect(own(container)).toHaveTextContent(/^Haiku 4.5$/);
+  });
+
+  it('says it in English', () => {
+    fakeBackend();
+    setLang('en');
+    show(ticket({ model: 'opus', effort: 'max' }));
+    expect(screen.getByLabelText('This ticket’s model: Opus, effort Max (over the Kanban’s)')).toHaveTextContent('Opus · Max');
+  });
+});
+
 // The window in English: the texts of the card come from the English catalog, its counts follow the plural rules of the
 // language and its amounts and times are written as English does. (What `lib/board.ts` and `lib/spend.ts` say is theirs.)
 describe('TicketCard in English', () => {
@@ -715,6 +867,11 @@ describe('TicketCard in English', () => {
     expect(within(screen.getByRole('list', { name: 'Criteria' })).getAllByRole('listitem')).toHaveLength(2);
     // The agent has not said what it does yet.
     expect(screen.getByText('Thinking')).toBeInTheDocument();
+  });
+
+  it('counts its images in English', () => {
+    show(ticket({ images: [{ file: 'a1.png', name: 'capture.png', mediaType: 'image/png' }] }));
+    expect(screen.getByRole('button', { name: 'DEM-1 Ajouter le fichier' })).toHaveAccessibleDescription('1 image attached');
   });
 
   it('labels the line its agent reported in English', () => {
@@ -792,6 +949,31 @@ describe('TicketCard in English', () => {
     menu.open!.items.find((i) => i.label === 'Delete')!.onClick!();
     expect(app.modal).toMatchObject({
       body: 'The ticket and its description are deleted. It will no longer be imported from Jira.',
+    });
+  });
+
+  it('says in English that the images of a deleted ticket go with it, imported or not', async () => {
+    const images = [
+      { file: 'a1.png', name: 'capture.png', mediaType: 'image/png' },
+      { file: 'b2.gif', name: 'schema.gif', mediaType: 'image/gif' },
+    ];
+    const external = { service: 'jira' as const, id: 'ATL-1', key: 'ATL-1', container: 'ATL', url: 'https://a.test/ATL-1', error: null };
+    const deleteIt = async () => {
+      await fireEvent.contextMenu(screen.getByRole('button', { name: /DEM-1/ }));
+      menu.open!.items.find((i) => i.label === 'Delete')!.onClick!();
+    };
+    const one = show(ticket({ images: images.slice(0, 1) }));
+    await deleteIt();
+    expect(app.modal).toMatchObject({ body: 'The ticket, its description and its image are deleted.' });
+    one.unmount();
+    const two = show(ticket({ images }));
+    await deleteIt();
+    expect(app.modal).toMatchObject({ body: 'The ticket, its description and its 2 images are deleted.' });
+    two.unmount();
+    show(ticket({ images, external }));
+    await deleteIt();
+    expect(app.modal).toMatchObject({
+      body: 'The ticket, its description and its 2 images are deleted. It will no longer be imported from Jira.',
     });
   });
 

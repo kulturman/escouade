@@ -71,6 +71,14 @@ Then, in a Windows terminal, run `wsl --shutdown` and restart Escouade.
 
 **Fix.** In Settings › Network, fill in “HTTP(S) proxy” (for example `http://user:password@proxy:3128`) and, if needed, “Exclusions” (the `NO_PROXY` list, separated by commas). The proxy is passed to Claude Code processes, quota reads, integrations, and updates. For an agent, it applies the next time its process (re)starts. For the built-in terminals, the launch commands, and the worktree setup and teardown commands to use it too, turn on “Also apply the proxy to the built-in terminals” (off by default). See the [Network settings](settings-network).
 
+### A company proxy refuses the update
+
+**Symptom.** The message “Couldn’t download the update” or “Couldn’t check for updates” mentions a “403 Forbidden”, asks whether it is “blocked by the network or a proxy?”, says that “your company’s proxy” refused the installer, or says the proxy asks for authentication.
+
+**Cause.** A company proxy (Zscaler, Netskope, Squid…) often lets the check through but refuses the installer to a client that isn’t a browser. Escouade announces itself honestly (`Escouade/<version>`) and doesn’t pass itself off as a browser; when the proxy refuses the request, it doesn’t make it again without the proxy. An automatic check only shows its error after several failures in a row, over more than an hour.
+
+**Fix.** If the message says the proxy asks for authentication, put the username and password in the proxy’s address, in Settings › Network (for example `http://user:password@proxy:3128`). Otherwise, click “Download in the browser” in the message: the release’s page opens, and the proxy may ask you to confirm a warning. For the built-in update to go through, ask your IT department to allow `github.com` and `release-assets.githubusercontent.com`, and the download of the release files for the client whose User-Agent starts with `Escouade/`. The details are in [“Behind a company proxy”](updates#behind-a-company-proxy).
+
 ### A corporate certificate makes connections fail
 
 **Symptom.** An “UnknownIssuer” error, or another TLS failure, for integrations, quotas, updates, or Claude Code.
@@ -182,6 +190,16 @@ See [notifications](notifications).
 **Symptom.** Settings › Integrations says “System keychain unreadable: restart Escouade or reconnect the account.” or “System keychain unavailable: the token stays in ~/.escouade/integrations.json.”
 
 **Fix.** Restart Escouade; if the message comes back, reconnect the account (the token is then saved again). In the second case, the token stays in `integrations.json`, readable only by you on macOS and Linux.
+
+## Terminals
+
+### A terminal is slow
+
+**Symptom.** A letter typed or a text pasted in a [terminal](terminals) takes a while to show, when a terminal usually answers in a few hundredths of a second.
+
+**Cause.** The time goes into one of the steps a keystroke takes: the window sending it to the backend, the terminal’s program (the shell, or Claude Code in the Claude Code view) sending the echo back, the way back into the window, then the drawing. A paste of a few thousand characters into PowerShell takes a tenth of a second or more by itself: PSReadLine redraws the line as it grows, in Windows Terminal as in Escouade.
+
+**Fix.** Open the app’s log (see “Where the app’s log is”, below): every echo that took more than 300 ms to show is noted there (at most once every 10 seconds per terminal), with the time of each step, for example “echo of a 1-byte write shown after 837 ms: written 0 ms after the backend got it, first output 835 ms after, the echo 835 ms after, to and from the window 1 ms (answer to the write 2 ms), painted 1 ms later”. Here nearly everything comes before “the echo”: the program was slow. A long “to and from the window” comes from the window, a long “painted” from its drawing. When each terminal opens, the log also says what draws it: “renderer webgl” followed by the graphics card’s name (a name like SwiftShader means drawing without a graphics card, which is slower), or “renderer dom”. Report it with these lines (see “Reporting a bug”).
 
 ## Log and reports
 

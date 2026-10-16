@@ -71,6 +71,14 @@ Puis, dans un terminal Windows, lance `wsl --shutdown` et relance Escouade.
 
 **Solution.** Dans Réglages › Réseau, renseigne « Proxy HTTP(S) » (par exemple `http://utilisateur:motdepasse@proxy:3128`) et, si besoin, « Exclusions » (la liste `NO_PROXY`, séparée par des virgules). Le proxy est transmis aux processus Claude Code, à la lecture des quotas, aux intégrations et aux mises à jour. Pour un agent, il s’applique au prochain (re)démarrage de son processus. Pour que les terminaux intégrés, les commandes de lancement et les commandes de préparation et de démontage des worktrees l’utilisent aussi, active « Appliquer aussi le proxy aux terminaux intégrés » (désactivé par défaut). Voir les [réglages Réseau](settings-network).
 
+### La mise à jour est refusée par un proxy d’entreprise
+
+**Symptôme.** Le message « Téléchargement de la mise à jour impossible » ou « Vérification des mises à jour impossible » parle d’un « 403 Forbidden », demande si c’est « bloqué par le réseau ou un proxy ? », dit que « le proxy de ton entreprise » a refusé l’installateur, ou dit que le proxy demande une authentification.
+
+**Cause.** Un proxy d’entreprise (Zscaler, Netskope, Squid…) laisse souvent passer la recherche mais refuse l’installateur à un client qui n’est pas un navigateur. Escouade s’annonce honnêtement (`Escouade/<version>`) et ne se fait pas passer pour un navigateur ; quand le proxy refuse la requête, elle ne la refait pas sans lui. Une recherche automatique ne montre son erreur qu’après plusieurs échecs de suite, sur plus d’une heure.
+
+**Solution.** Si le message dit que le proxy demande une authentification, mets l’identifiant et le mot de passe dans l’adresse du proxy, dans Réglages › Réseau (par exemple `http://utilisateur:motdepasse@proxy:3128`). Sinon, clique sur « Télécharger dans le navigateur » dans le message : la page de la release s’ouvre, et le proxy peut demander de confirmer un avertissement. Pour que la mise à jour intégrée passe, demande au service informatique d’autoriser `github.com` et `release-assets.githubusercontent.com`, et le téléchargement des fichiers de la release pour le client dont le User-Agent commence par `Escouade/`. Le détail est dans [« Derrière un proxy d’entreprise »](updates#derriere-un-proxy-d-entreprise).
+
 ### Un certificat d’entreprise fait échouer les connexions
 
 **Symptôme.** Une erreur « UnknownIssuer », ou un autre échec TLS, pour les intégrations, les quotas, les mises à jour ou Claude Code.
@@ -182,6 +190,16 @@ Voir les [notifications](notifications).
 **Symptôme.** Réglages › Intégrations dit « Trousseau du système illisible : relance Escouade ou reconnecte le compte. » ou « Trousseau du système indisponible : le jeton reste dans ~/.escouade/integrations.json. »
 
 **Solution.** Relance Escouade ; si le message revient, reconnecte le compte (le jeton est alors enregistré de nouveau). Dans le second cas, le jeton reste dans `integrations.json`, lisible par toi seul sous macOS et Linux.
+
+## Terminaux
+
+### Un terminal est lent
+
+**Symptôme.** Une lettre tapée ou un texte collé dans un [terminal](terminals) met du temps à s’afficher, alors qu’un terminal répond d’ordinaire en quelques centièmes de seconde.
+
+**Cause.** Le temps passe à l’une des étapes du chemin d’une frappe : la fenêtre qui l’envoie au backend, le programme du terminal (le shell, Claude Code dans la vue Claude Code) qui renvoie l’écho, le retour dans la fenêtre, puis l’affichage. Un collage de quelques milliers de caractères dans PowerShell prend de lui-même une à quelques dixièmes de seconde : PSReadLine redessine la ligne à mesure qu’elle grandit, dans Windows Terminal comme dans Escouade.
+
+**Solution.** Ouvre le journal de l’app (voir « Où est le journal de l’app », plus bas) : chaque écho qui a mis plus de 300 ms à s’afficher y est noté (au plus une fois toutes les 10 secondes par terminal), avec le temps de chaque étape, par exemple « echo of a 1-byte write shown after 837 ms: written 0 ms after the backend got it, first output 835 ms after, the echo 835 ms after, to and from the window 1 ms (answer to the write 2 ms), painted 1 ms later ». Ici, presque tout est avant « the echo » : c’est le programme qui a tardé. Un long « to and from the window » vient de la fenêtre, un long « painted » de son affichage. Le journal dit aussi, à l’ouverture de chaque terminal, son moteur de rendu : « renderer webgl » suivi du nom de la carte graphique (un nom comme SwiftShader veut dire un rendu sans carte graphique, plus lent), ou « renderer dom ». Signale-le avec ces lignes (voir « Signaler un bug »).
 
 ## Journal et signalement
 

@@ -11,7 +11,7 @@ import ContextMenu from './ContextMenu.svelte';
 import Sidebar from './Sidebar.svelte';
 import { getByTip } from '../test/tip';
 
-// The xterm.js instance a terminal draws on is not one of jsdom's: only what is asked of the backend is looked at.
+// The terminal opened is not one of xterm.js (jsdom has no canvas for it): only what is asked of the backend is looked at.
 vi.mock('../lib/terminals', async (original) => ({
   ...(await original<typeof import('../lib/terminals')>()),
   openTerminal: vi.fn((projectId: string, shell: string, name: string) => Promise.resolve({ id: 't1', projectId, name, shell })),
@@ -495,6 +495,389 @@ describe('Sidebar remote control', () => {
     render(Sidebar, { project: project() });
     expect(getByTip(document.body, /Remote control : en attente de connexion/)).toBeInTheDocument();
   });
+
+  describe('where it comes from', () => {
+    const STATE = 'Remote control : connecté (accessible depuis claude.ai et l’app Claude)';
+
+    it.each([
+      ['hand', 'activé à la main'],
+      ['project', 'activé par le réglage du projet'],
+      ['global', 'activé par le réglage de tous les agents'],
+    ] as const)('says on the card of an agent whose remote control is %s’s, after its link state', (remoteSource, source) => {
+      resetApp({ projects: [project()], agents: [agent({ remoteControl: true, remoteSource, remoteState: 'connected' })] });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      const card = screen.getByRole('button', { name: /refacto-auth/ });
+      expect(getByTip(card, `${STATE} · ${source}`)).toBeInTheDocument();
+    });
+
+    it('follows the link state with the source, whatever the state', () => {
+      resetApp({
+        projects: [project()],
+        agents: [
+          agent({ remoteControl: true, remoteSource: 'project', remoteState: 'ready' }),
+          agent({ id: 'a2', name: 'tests-e2e', createdAt: 2, remoteControl: true, remoteSource: 'global', remoteState: null }),
+        ],
+      });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      expect(
+        getByTip(
+          screen.getByRole('button', { name: /refacto-auth/ }),
+          'Remote control : connexion… (accessible depuis claude.ai et l’app Claude) · activé par le réglage du projet',
+        ),
+      ).toBeInTheDocument();
+      expect(
+        getByTip(
+          screen.getByRole('button', { name: /tests-e2e/ }),
+          'Remote control : en attente de connexion (accessible depuis claude.ai et l’app Claude) · activé par le réglage de tous les agents',
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it('keeps the plain state when the backend gives no source', () => {
+      resetApp({ projects: [project()], agents: [agent({ remoteControl: true, remoteSource: null, remoteState: 'connected' })] });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      expect(getByTip(document.body, STATE)).toBeInTheDocument();
+    });
+
+    it('has no icon for an agent without remote control, set apart or not', () => {
+      resetApp({
+        projects: [project()],
+        agents: [agent({ remoteControl: false }), agent({ id: 'a2', name: 'tests-e2e', createdAt: 2, remoteOff: true })],
+      });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      expect(document.querySelector('.rc')).toBeNull();
+    });
+  });
+
+  describe('of an agent in Claude Code’s view', () => {
+    const STATE_CONNECTED = 'Remote control : connecté (accessible depuis claude.ai et l’app Claude)';
+    const STATE_CONNECTING = 'Remote control : connexion… (accessible depuis claude.ai et l’app Claude)';
+    const NO_INTERFACE = 'Remote control : aucune interface lancée, pas joignable pour l’instant (ouvre l’agent pour la lancer)';
+    const NEXT_LAUNCH_STATE = 'Remote control : au prochain lancement de son interface Claude Code';
+    const UNAVAILABLE =
+      'Remote control : pas ouvert par Claude Code (compte sans abonnement claude.ai, réseau, proxy ou règle de l’organisation)';
+    const STILL_ON =
+      'Remote control encore actif dans l’interface ouverte, jusqu’à son prochain lancement (sa commande /remote-control le coupe)';
+    const NEXT_LAUNCH =
+      'Pris en compte au prochain lancement de son interface Claude Code ; d’ici là, c’est sa commande /remote-control qui le fait.';
+    const SESSION = 'https://claude.ai/code/session_abc';
+    const toasts = () => app.toasts.map((x) => [x.text, x.kind]);
+    const settle = () => new Promise((r) => setTimeout(r));
+    /** An agent in Claude Code’s view, with the remote control `over` says. */
+    const inClaudeCode = (over: Partial<Parameters<typeof agent>[0]> = {}) => agent({ terminal: true, ...over });
+    const icon = (name: RegExp, text: string) => getByTip(screen.getByRole('button', { name }), text);
+
+    describe('on its card', () => {
+      it('says no interface runs when it has none: not reachable until one starts', () => {
+        resetApp({
+          projects: [project()],
+          agents: [
+            // The state is the interface’s: with none, a stale one is of no account.
+            inClaudeCode({ remoteControl: true, remoteSource: 'global', interfaceRemote: null, remoteState: 'connected' }),
+          ],
+        });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        const tip = icon(/refacto-auth/, `${NO_INTERFACE} · activé par le réglage de tous les agents`);
+        expect(tip).toBeInTheDocument();
+        // Neutral: no link to speak of.
+        expect(tip).not.toHaveClass('on');
+        expect(tip).not.toHaveClass('warn');
+      });
+
+      it('says its interface takes the remote control from its next launch when it was started without it', () => {
+        resetApp({
+          projects: [project()],
+          agents: [
+            inClaudeCode({ remoteControl: true, remoteSource: 'project', interfaceRemote: false }),
+            // Whatever the state the interface reports: it has not the remote control of Escouade’s.
+            inClaudeCode({
+              id: 'a2',
+              name: 'tests-e2e',
+              createdAt: 2,
+              remoteControl: true,
+              remoteSource: 'hand',
+              interfaceRemote: false,
+              remoteState: 'connected',
+            }),
+          ],
+        });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        const later = icon(/refacto-auth/, `${NEXT_LAUNCH_STATE} · activé par le réglage du projet`);
+        expect(later).not.toHaveClass('on');
+        expect(later).not.toHaveClass('warn');
+        expect(icon(/tests-e2e/, `${NEXT_LAUNCH_STATE} · activé à la main`)).not.toHaveClass('on');
+      });
+
+      it('says Claude Code did not open the remote control when its interface runs without having been linked (no subscription, network, proxy or policy)', () => {
+        resetApp({
+          projects: [project()],
+          agents: [inClaudeCode({ remoteControl: true, remoteSource: 'global', interfaceRemote: true, remoteState: 'unavailable' })],
+        });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        const tip = icon(/refacto-auth/, `${UNAVAILABLE} · activé par le réglage de tous les agents`);
+        expect(tip).not.toHaveClass('on');
+        expect(tip).not.toHaveClass('warn');
+      });
+
+      it('is blue and says it is connected when its interface says its remote control is on', () => {
+        resetApp({
+          projects: [project()],
+          agents: [
+            inClaudeCode({
+              remoteControl: true,
+              remoteSource: 'project',
+              interfaceRemote: true,
+              remoteUrl: SESSION,
+              remoteState: 'connected',
+            }),
+          ],
+        });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        const tip = icon(/refacto-auth/, `${STATE_CONNECTED} · activé par le réglage du projet`);
+        expect(tip).toHaveClass('on');
+        expect(tip).not.toHaveClass('warn');
+      });
+
+      it('says it is connecting while its interface, started with the remote control, does not say it is on yet', () => {
+        resetApp({
+          projects: [project()],
+          agents: [
+            inClaudeCode({ remoteControl: true, remoteSource: 'hand', interfaceRemote: true, remoteState: null }),
+            inClaudeCode({ id: 'a2', name: 'tests-e2e', createdAt: 2, remoteControl: true, interfaceRemote: true, remoteState: 'ready' }),
+          ],
+        });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        const tip = icon(/refacto-auth/, `${STATE_CONNECTING} · activé à la main`);
+        expect(tip).not.toHaveClass('on');
+        expect(tip).not.toHaveClass('warn');
+        expect(icon(/tests-e2e/, STATE_CONNECTING)).not.toHaveClass('on');
+      });
+
+      it('shows a lasting marker when the remote control is off but the open interface is still linked', () => {
+        resetApp({
+          projects: [project()],
+          agents: [
+            inClaudeCode({ remoteControl: false, remoteOff: true, interfaceRemote: true, remoteState: 'connected', remoteUrl: SESSION }),
+          ],
+        });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        const tip = icon(/refacto-auth/, STILL_ON);
+        // Set apart from the blue and the grey ones: a warning, barred.
+        expect(tip).toHaveClass('warn');
+        expect(tip).not.toHaveClass('on');
+        expect(tip.querySelector('.bar')).not.toBeNull();
+      });
+
+      it('bars only the lasting marker', () => {
+        resetApp({
+          projects: [project()],
+          agents: [inClaudeCode({ remoteControl: true, interfaceRemote: true, remoteState: 'connected' })],
+        });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        expect(document.querySelector('.rc')).not.toBeNull();
+        expect(document.querySelector('.rc .bar')).toBeNull();
+      });
+
+      it('shows no marker when the interface is not linked, or is not the one that is shown', () => {
+        resetApp({
+          projects: [project()],
+          agents: [
+            // Off, and its interface started without it, or none.
+            inClaudeCode({ remoteControl: false, interfaceRemote: false }),
+            inClaudeCode({ id: 'a2', name: 'tests-e2e', createdAt: 2, remoteControl: false, interfaceRemote: null }),
+            // Off, its interface started with it, but Claude Code did not open it: it is linked to nothing.
+            inClaudeCode({ id: 'a3', name: 'lint', createdAt: 3, remoteControl: false, interfaceRemote: true, remoteState: 'unavailable' }),
+            // Off, its interface started with it, but not linked (yet): nothing to warn about.
+            inClaudeCode({ id: 'a5', name: 'booting', createdAt: 5, remoteControl: false, interfaceRemote: true, remoteState: null }),
+            // Not in Claude Code’s view: the interface is not Escouade’s to show.
+            agent({ id: 'a4', name: 'docs', createdAt: 4, remoteControl: false, interfaceRemote: true }),
+          ],
+        });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        expect(document.querySelector('.rc')).toBeNull();
+      });
+    });
+
+    describe('in its menu', () => {
+      it('offers to turn it on, as an agent in Escouade’s view, with no claude.ai session to open', async () => {
+        resetApp({ projects: [project()], agents: [inClaudeCode({ remoteUrl: SESSION })] });
+        const backend = fakeBackend();
+        render(Sidebar, { project: project() });
+        await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+        expect(items()).toContain('Activer le remote control');
+        expect(items()).not.toContain('Désactiver le remote control');
+        expect(items()).not.toContain('Ouvrir sur claude.ai');
+        expect(items()).not.toContain('Copier le lien claude.ai');
+        click('Activer le remote control');
+        await settle();
+        expect(backend.called('set_remote_control')[0].args).toEqual({ id: 'a1', enabled: true });
+      });
+
+      it('offers to turn it off, and its claude.ai session, once its interface says it is connected', async () => {
+        resetApp({
+          projects: [project()],
+          agents: [
+            inClaudeCode({
+              remoteControl: true,
+              remoteSource: 'global',
+              interfaceRemote: true,
+              remoteUrl: SESSION,
+              remoteState: 'connected',
+            }),
+          ],
+        });
+        const backend = fakeBackend();
+        render(Sidebar, { project: project() });
+        await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+        expect(items()).toContain('Désactiver le remote control');
+        expect(items()).not.toContain('Activer le remote control');
+        expect(items()).toEqual(expect.arrayContaining(['Ouvrir sur claude.ai', 'Copier le lien claude.ai']));
+        click('Désactiver le remote control');
+        await settle();
+        expect(backend.called('set_remote_control')[0].args).toEqual({ id: 'a1', enabled: false });
+      });
+
+      it.each([
+        ['it is not connected yet', { interfaceRemote: true, remoteState: null, remoteUrl: SESSION }],
+        ['Claude Code did not open it', { interfaceRemote: true, remoteState: 'unavailable', remoteUrl: SESSION }],
+        ['the interface says connected but gave no link', { interfaceRemote: true, remoteState: 'connected', remoteUrl: null }],
+        ['no interface runs', { interfaceRemote: null, remoteState: null, remoteUrl: SESSION }],
+      ] as const)('offers no claude.ai session when %s', async (_, over) => {
+        resetApp({ projects: [project()], agents: [inClaudeCode({ remoteControl: true, ...over })] });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+        expect(items()).toContain('Désactiver le remote control');
+        expect(items()).not.toContain('Ouvrir sur claude.ai');
+        expect(items()).not.toContain('Copier le lien claude.ai');
+      });
+
+      it('offers to turn it on, and no claude.ai session, while only its open interface is still linked', async () => {
+        resetApp({
+          projects: [project()],
+          agents: [
+            inClaudeCode({ remoteControl: false, remoteOff: true, interfaceRemote: true, remoteState: 'connected', remoteUrl: SESSION }),
+          ],
+        });
+        const backend = fakeBackend({ set_remote_control: () => true });
+        render(Sidebar, { project: project() });
+        await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+        expect(items()).toContain('Activer le remote control');
+        expect(items()).not.toContain('Désactiver le remote control');
+        expect(items()).not.toContain('Ouvrir sur claude.ai');
+        expect(items()).not.toContain('Copier le lien claude.ai');
+        click('Activer le remote control');
+        await expect.poll(toasts).toEqual([[NEXT_LAUNCH, 'ok']]);
+        expect(backend.called('set_remote_control')[0].args).toEqual({ id: 'a1', enabled: true });
+      });
+
+      it('copies the claude.ai session of its interface', async () => {
+        const write = vi.fn(() => Promise.resolve());
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
+        resetApp({
+          projects: [project()],
+          agents: [inClaudeCode({ remoteControl: true, interfaceRemote: true, remoteUrl: SESSION, remoteState: 'connected' })],
+        });
+        fakeBackend();
+        render(Sidebar, { project: project() });
+        await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+        click('Copier le lien claude.ai');
+        await expect.poll(toasts).toEqual([['Lien claude.ai copié', 'ok']]);
+        expect(write).toHaveBeenCalledWith(SESSION);
+      });
+
+      it('is not offered to an archived agent, in either view', async () => {
+        resetApp({
+          projects: [project()],
+          agents: [
+            agent({ archived: true, remoteControl: true }),
+            agent({ id: 'a2', name: 'tests-e2e', createdAt: 2, archived: true, terminal: true }),
+          ],
+        });
+        fakeBackend();
+        app.showArchived = true;
+        render(Sidebar, { project: project() });
+        for (const name of [/refacto-auth/, /tests-e2e/]) {
+          await fireEvent.contextMenu(screen.getByRole('button', { name }));
+          expect(items()).toContain('Restaurer');
+          expect(items().filter((x) => /remote control|claude\.ai/.test(x))).toEqual([]);
+        }
+        app.showArchived = false;
+      });
+    });
+
+    describe('when it is changed', () => {
+      it.each([
+        ['on', false],
+        ['off', true],
+      ] as const)(
+        'tells it applies at the next launch of its interface when the backend says so, turning it %s',
+        async (_, remoteControl) => {
+          resetApp({ projects: [project()], agents: [inClaudeCode({ terminalId: 't1', remoteControl, interfaceRemote: remoteControl })] });
+          fakeBackend({ set_remote_control: () => true });
+          render(Sidebar, { project: project() });
+          await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+          click(remoteControl ? 'Désactiver le remote control' : 'Activer le remote control');
+          await expect.poll(toasts).toEqual([[NEXT_LAUNCH, 'ok']]);
+        },
+      );
+
+      it('says it is reachable when turned on and the backend applies it now: it starts it in the background', async () => {
+        resetApp({ projects: [project()], agents: [inClaudeCode({ terminalId: 't1' })] });
+        const backend = fakeBackend({ set_remote_control: () => false });
+        render(Sidebar, { project: project() });
+        await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+        click('Activer le remote control');
+        await expect.poll(toasts).toEqual([['refacto-auth est accessible depuis claude.ai et l’app Claude', 'ok']]);
+        expect(backend.called('set_remote_control')[0].args).toEqual({ id: 'a1', enabled: true });
+      });
+
+      it('says nothing when turned off and the backend applies it now: it stops the one it started', async () => {
+        resetApp({ projects: [project()], agents: [inClaudeCode({ terminalId: null, remoteControl: true })] });
+        const backend = fakeBackend({ set_remote_control: () => false });
+        render(Sidebar, { project: project() });
+        await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+        click('Désactiver le remote control');
+        await settle();
+        expect(backend.called('set_remote_control')[0].args).toEqual({ id: 'a1', enabled: false });
+        expect(toasts()).toEqual([]);
+      });
+
+      it('tells the refusal of the backend, and not that the change applies later', async () => {
+        resetApp({ projects: [project()], agents: [inClaudeCode({ terminalId: 't1' })] });
+        fakeBackend({
+          set_remote_control: () => {
+            throw 'Le remote control a échoué.';
+          },
+        });
+        render(Sidebar, { project: project() });
+        await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+        click('Activer le remote control');
+        await expect.poll(toasts).toEqual([['Le remote control a échoué.', 'error']]);
+      });
+
+      it('still says the agent is reachable when it is turned on in Escouade’s view', async () => {
+        resetApp({ projects: [project()], agents: [agent({ terminalId: 't1' })] });
+        fakeBackend({ set_remote_control: () => false });
+        render(Sidebar, { project: project() });
+        await fireEvent.contextMenu(screen.getByRole('button', { name: /refacto-auth/ }));
+        click('Activer le remote control');
+        await expect.poll(toasts).toEqual([['refacto-auth est accessible depuis claude.ai et l’app Claude', 'ok']]);
+      });
+    });
+  });
 });
 
 describe('Sidebar terminal entry', () => {
@@ -538,6 +921,135 @@ describe('Sidebar terminal entry', () => {
     expect(labels.indexOf('Ouvrir un terminal')).toBe(labels.indexOf('Ouvrir dans l’éditeur') + 1);
     await userEvent.click(screen.getByText(/Archivés/));
     expect(await menuOf(/vieux/)).not.toContain('Ouvrir un terminal');
+  });
+});
+
+describe('Sidebar terminals menu (ESC-18)', () => {
+  const wt = (id: string) => ({ path: `C:\\code\\demo-api\\.claude\\worktrees\\${id}`, branch: `escouade/${id}`, baseBranch: 'main' });
+  const plus = () => getByTip(document.body, 'Nouveau terminal');
+  const labels = () => menu.open!.items.map((i) => i.label);
+
+  beforeEach(() => {
+    vi.mocked(openTerminal).mockClear();
+    resetApp({
+      projects: [project(), project({ id: 'p2', name: 'studio-web' })],
+      agents: [
+        // Created in this order, which is not the alphabetical one: the sidebar lists them so.
+        agent({ id: 'a1', name: 'zeta', worktree: wt('a1'), createdAt: 1 }),
+        agent({ id: 'a2', name: 'alpha', worktree: wt('a2'), createdAt: 2 }),
+        // In the project's folder, archived, or of another project: no worktree to open one in.
+        agent({ id: 'a3', name: 'dans-le-dossier', createdAt: 3 }),
+        agent({ id: 'a4', name: 'vieux', worktree: wt('a4'), archived: true, createdAt: 4 }),
+        agent({ id: 'a5', name: 'ailleurs', projectId: 'p2', worktree: wt('a5'), createdAt: 5 }),
+      ],
+    });
+    app.shells = [
+      { id: 'pwsh', label: 'PowerShell 7', path: 'pwsh.exe' },
+      { id: 'bash', label: 'Git Bash', path: 'bash.exe' },
+    ];
+    fakeBackend();
+  });
+  afterEach(() => menu.close());
+
+  it('lists the shells, then « Dans le worktree de… » after a separator', async () => {
+    render(Sidebar, { project: project() });
+    await userEvent.click(plus());
+    expect(labels()).toEqual(['PowerShell 7', 'Git Bash', '', 'Dans le worktree de…']);
+    expect(menu.open!.items[2]).toMatchObject({ separator: true });
+    // The shells still open a terminal in the project.
+    menu.open!.items[1].onClick!();
+    expect(openTerminal).toHaveBeenCalledWith('p1', 'bash', 'bash-1', undefined);
+  });
+
+  it('replaces the menu with the agents of the project that have a worktree, in the order of the sidebar', async () => {
+    render(Sidebar, { project: project() });
+    await userEvent.click(plus());
+    menu.open!.items[3].onClick!();
+    await vi.waitFor(() => expect(labels()).toEqual(['zeta', 'alpha']));
+    // Neither the one in the project’s folder, the archived one, nor the other project’s.
+    expect(menu.open!.items.every((i) => i.hint === undefined && !i.separator)).toBe(true);
+    // Opened from the button, as the first menu was: the keyboard works it.
+    expect(menu.open).toMatchObject({ keyboard: true });
+  });
+
+  it('opens a terminal in the worktree of the agent chosen, named after it', async () => {
+    render(Sidebar, { project: project() });
+    await userEvent.click(plus());
+    menu.open!.items[3].onClick!();
+    await vi.waitFor(() => expect(labels()).toEqual(['zeta', 'alpha']));
+    menu.open!.items.find((i) => i.label === 'alpha')!.onClick!();
+    expect(openTerminal).toHaveBeenCalledWith('p1', 'pwsh', 'pwsh · alpha', { agentId: 'a2' });
+    await expect.poll(() => app.term?.name).toBe('pwsh · alpha');
+  });
+
+  it('works from the keyboard: the focus goes into the second menu and comes back to the button', async () => {
+    render(Sidebar, { project: project() });
+    render(ContextMenu);
+    plus().focus();
+    await userEvent.keyboard('{Enter}');
+    // (Its name carries the hint: the shell’s glyph.)
+    expect(await screen.findByRole('menuitem', { name: /^PowerShell 7/ })).toHaveFocus();
+    await userEvent.keyboard('{ArrowDown}{ArrowDown}');
+    expect(screen.getByRole('menuitem', { name: 'Dans le worktree de…' })).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
+    const first = await screen.findByRole('menuitem', { name: 'zeta' });
+    expect(screen.queryByRole('menuitem', { name: /^PowerShell 7/ })).toBeNull();
+    await vi.waitFor(() => expect(first).toHaveFocus());
+    await userEvent.keyboard('{ArrowDown}{Enter}');
+    expect(openTerminal).toHaveBeenCalledWith('p1', 'pwsh', 'pwsh · alpha', { agentId: 'a2' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(plus()).toHaveFocus();
+  });
+
+  it('works with the mouse as well', async () => {
+    render(Sidebar, { project: project() });
+    render(ContextMenu);
+    await userEvent.click(plus());
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Dans le worktree de…' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'zeta' }));
+    expect(openTerminal).toHaveBeenCalledWith('p1', 'pwsh', 'pwsh · zeta', { agentId: 'a1' });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('offers neither the entry nor a separator when no agent of the project has a worktree to open', async () => {
+    resetApp({
+      projects: [project(), project({ id: 'p2', name: 'studio-web' })],
+      agents: [
+        agent({ id: 'a3', name: 'dans-le-dossier' }),
+        agent({ id: 'a4', name: 'vieux', worktree: wt('a4'), archived: true, createdAt: 2 }),
+        agent({ id: 'a5', name: 'ailleurs', projectId: 'p2', worktree: wt('a5'), createdAt: 3 }),
+      ],
+    });
+    app.shells = [{ id: 'pwsh', label: 'PowerShell 7', path: 'pwsh.exe' }];
+    render(Sidebar, { project: project() });
+    await userEvent.click(plus());
+    expect(labels()).toEqual(['PowerShell 7']);
+    menu.close();
+    // No agent at all: the same.
+    resetApp({ projects: [project()], agents: [] });
+    app.shells = [{ id: 'pwsh', label: 'PowerShell 7', path: 'pwsh.exe' }];
+    await userEvent.click(plus());
+    expect(labels()).toEqual(['PowerShell 7']);
+  });
+
+  it('keeps telling there is no shell, whatever the agents', async () => {
+    app.shells = [];
+    render(Sidebar, { project: project() });
+    await userEvent.click(plus());
+    expect(menu.open).toBeNull();
+    expect(app.toasts.at(-1)).toMatchObject({
+      text: 'Aucun shell détecté (PowerShell 7, Git Bash, WSL). Vérifie les réglages.',
+      kind: 'error',
+    });
+  });
+
+  it('is written in English', async () => {
+    setLang('en');
+    render(Sidebar, { project: project() });
+    await userEvent.click(getByTip(document.body, 'New terminal'));
+    expect(labels()).toEqual(['PowerShell 7', 'Git Bash', '', 'In the worktree of…']);
+    menu.open!.items[3].onClick!();
+    await vi.waitFor(() => expect(labels()).toEqual(['zeta', 'alpha']));
   });
 });
 
@@ -926,6 +1438,80 @@ describe('Sidebar in English', () => {
     expect(menu.open!.items.find((i) => i.label === 'Archive')).toMatchObject({ hint: 'keeps the conversation' });
   });
 
+  it('writes where the remote control of an agent comes from, and its state in Claude Code’s view, in English', async () => {
+    const view = { terminal: true, remoteControl: true } as const;
+    resetApp({
+      projects: [project()],
+      agents: [
+        agent({ remoteControl: true, remoteSource: 'hand', remoteState: 'connected' }),
+        agent({ id: 'a2', name: 'tests-e2e', createdAt: 2, remoteControl: true, remoteSource: 'project', remoteState: 'connected' }),
+        agent({ id: 'a3', name: 'lint', createdAt: 3, remoteControl: true, remoteSource: 'global', remoteState: null }),
+        agent({ id: 'a4', name: 'docs', createdAt: 4, ...view, remoteSource: 'global', interfaceRemote: null }),
+        agent({ id: 'a5', name: 'relaunch', createdAt: 5, ...view, remoteSource: 'project', interfaceRemote: false }),
+        agent({ id: 'a6', name: 'denied', createdAt: 6, ...view, remoteSource: 'hand', interfaceRemote: true, remoteState: 'unavailable' }),
+        agent({
+          id: 'a7',
+          name: 'linked',
+          createdAt: 7,
+          ...view,
+          remoteSource: 'global',
+          interfaceRemote: true,
+          remoteState: 'connected',
+          remoteUrl: 'https://claude.ai/code/session_abc',
+        }),
+        agent({ id: 'a8', name: 'booting', createdAt: 8, ...view, remoteSource: 'hand', interfaceRemote: true, remoteState: null }),
+        agent({ id: 'a9', name: 'sticky', createdAt: 9, terminal: true, remoteOff: true, interfaceRemote: true, remoteState: 'connected' }),
+        // Off, its interface started with the remote control but never linked: no marker.
+        agent({ id: 'a10', name: 'dormant', createdAt: 10, terminal: true, remoteOff: true, interfaceRemote: true, remoteState: null }),
+      ],
+    });
+    setLang('en');
+    fakeBackend({ set_remote_control: () => true });
+    render(Sidebar, { project: project() });
+    const tipOf = (name: RegExp, text: string) => getByTip(screen.getByRole('button', { name }), text);
+    const reach = '(reachable from claude.ai and the Claude app)';
+    expect(tipOf(/refacto-auth/, `Remote control: connected ${reach} · turned on by hand`)).toBeInTheDocument();
+    expect(tipOf(/tests-e2e/, `Remote control: connected ${reach} · turned on by the project’s setting`)).toBeInTheDocument();
+    expect(
+      tipOf(/lint/, `Remote control: waiting for a connection ${reach} · turned on by the setting for all agents`),
+    ).toBeInTheDocument();
+    expect(
+      tipOf(
+        /docs/,
+        'Remote control: no interface running, not reachable for now (open the agent to start it) · turned on by the setting for all agents',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      tipOf(/relaunch/, 'Remote control: from the next launch of its Claude Code interface · turned on by the project’s setting'),
+    ).toBeInTheDocument();
+    expect(
+      tipOf(
+        /denied/,
+        'Remote control: not opened by Claude Code (no claude.ai subscription, network, proxy or organization policy) · turned on by hand',
+      ),
+    ).toBeInTheDocument();
+    expect(tipOf(/linked/, `Remote control: connected ${reach} · turned on by the setting for all agents`)).toHaveClass('on');
+    expect(tipOf(/booting/, `Remote control: connecting… ${reach} · turned on by hand`)).toBeInTheDocument();
+    expect(
+      tipOf(/sticky/, 'Remote control still on in the open interface, until its next launch (its /remote-control command turns it off)'),
+    ).toHaveClass('warn');
+    expect(screen.getByRole('button', { name: /dormant/ }).querySelector('.rc')).toBeNull();
+    // The menu of an agent in Claude Code’s view with a link, and what a change tells.
+    await fireEvent.contextMenu(screen.getByRole('button', { name: /linked/ }));
+    expect(items()).toEqual(expect.arrayContaining(['Turn off remote control', 'Open on claude.ai', 'Copy the claude.ai link']));
+    await fireEvent.contextMenu(screen.getByRole('button', { name: /docs/ }));
+    expect(items()).toContain('Turn off remote control');
+    expect(items()).not.toContain('Open on claude.ai');
+    menu.open!.items.find((i) => i.label === 'Turn off remote control')!.onClick!();
+    await expect
+      .poll(() => app.toasts.map((x) => [x.text, x.kind]))
+      .toEqual([['Applies at the next launch of its Claude Code interface; until then, its /remote-control command does it.', 'ok']]);
+    // The marker of a lasting remote control offers to turn it on.
+    await fireEvent.contextMenu(screen.getByRole('button', { name: /sticky/ }));
+    expect(items()).toContain('Turn on remote control');
+    expect(items()).not.toContain('Turn off remote control');
+  });
+
   it('offers to go back to Escouade’s view in English', async () => {
     app.agents.a1 = { ...app.agents.a1, terminal: true };
     fakeBackend();
@@ -970,5 +1556,230 @@ describe('Sidebar in English', () => {
     });
     await userEvent.click(getByTip(document.body, 'New terminal'));
     expect(app.toasts.at(-1)).toMatchObject({ text: 'No shell found (PowerShell 7, Git Bash, WSL). Check the settings.', kind: 'error' });
+  });
+});
+
+describe('Sidebar subagents of an agent', () => {
+  const sub = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    title: `sous-agent ${id}`,
+    status: 'running',
+    background: true,
+    tools: 0,
+    startedAt: 1,
+    ...over,
+  });
+  const withSubs = (agents: unknown[]) => ({ source: null, tasks: [], agents, launched: agents.length, workflows: [] }) as never;
+  const group = (name = 'Sous-agents de refacto-auth') => screen.getByRole('group', { name });
+  const fold = () => within(group()).getByRole('button', { name: /^Sous-agents/ });
+
+  it('unfolds under the card those running, with their model and what they do, then how many finished', async () => {
+    resetApp({
+      agents: [
+        agent({
+          plan: withSubs([
+            sub('s1', { title: 'Chercher la cause', model: 'haiku', doing: 'Lit src/a.ts' }),
+            sub('s2', { title: 'Relire', model: 'sonnet' }),
+            sub('s3', { title: 'Vieux', status: 'done', endedAt: 5 }),
+          ]),
+        }),
+        agent({ id: 'a2', name: 'tests-e2e', createdAt: 2 }),
+      ],
+    });
+    fakeBackend();
+    render(Sidebar, { project: project() });
+    // Under the card, not in it.
+    const card = screen.getByRole('button', { name: /refacto-auth/ });
+    expect(card).not.toContainElement(fold());
+    expect(fold()).toHaveAttribute('aria-expanded', 'true');
+    expect(fold()).toHaveTextContent('Sous-agents 2 en cours 1 fini');
+    const list = within(group()).getByRole('list');
+    const first = within(list).getByRole('button', { name: /Chercher la cause/ });
+    expect(first).toHaveTextContent('Chercher la cause');
+    expect(first).toHaveTextContent('Haiku');
+    expect(first).toHaveTextContent('Lit src/a.ts');
+    expect(within(list).getByRole('button', { name: /Relire/ })).toBeInTheDocument();
+    // The finished ones are counted, folded.
+    expect(within(list).queryByRole('button', { name: /Vieux/ })).not.toBeInTheDocument();
+    const finished = within(list).getByRole('button', { name: '1 sous-agent fini' });
+    expect(finished).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(finished);
+    expect(finished).toHaveAttribute('aria-expanded', 'true');
+    const old = within(list).getByRole('button', { name: /Vieux/ });
+    expect(old).toHaveTextContent('Terminé');
+    // An agent without subagents has no fold.
+    expect(screen.queryByRole('group', { name: 'Sous-agents de tests-e2e' })).not.toBeInTheDocument();
+  });
+
+  it('is folded when none runs, and the chevron unfolds it', async () => {
+    resetApp({
+      agents: [
+        agent({
+          plan: withSubs([sub('s1', { status: 'stopped', endedAt: 3 }), sub('s2', { status: 'interrupted', endedAt: 4 })]),
+        }),
+      ],
+    });
+    fakeBackend();
+    render(Sidebar, { project: project() });
+    expect(fold()).toHaveAttribute('aria-expanded', 'false');
+    expect(fold()).toHaveTextContent('2 finis');
+    expect(fold()).not.toHaveTextContent('en cours');
+    expect(within(group()).queryByRole('list')).not.toBeInTheDocument();
+    await userEvent.click(fold());
+    expect(fold()).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.click(screen.getByRole('button', { name: '2 sous-agents finis' }));
+    expect(screen.getByRole('button', { name: /sous-agent s1/ })).toHaveTextContent('Arrêté');
+    expect(screen.getByRole('button', { name: /sous-agent s2/ })).toHaveTextContent('Interrompu');
+    // Folded again by the reader, it stays so.
+    await userEvent.click(fold());
+    expect(fold()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('opens a subagent’s conversation in place of the agent’s, and says which is open', async () => {
+    resetApp({
+      agents: [agent({ plan: withSubs([sub('s1', { title: 'Chercher' })]) }), agent({ id: 'a2', name: 'tests-e2e', createdAt: 2 })],
+    });
+    app.ui.selectedAgent = { p1: 'a2' };
+    fakeBackend();
+    render(Sidebar, { project: project() });
+    const row = screen.getByRole('button', { name: /Chercher/ });
+    expect(row).not.toHaveAttribute('aria-current');
+    await userEvent.click(row);
+    expect(app.ui.selectedAgent.p1).toBe('a1');
+    expect(app.subView.a1).toBe('s1');
+    expect(row).toHaveAttribute('aria-current', 'page');
+    // The card of the agent goes back to its own conversation.
+    await userEvent.click(screen.getByRole('button', { name: /refacto-auth/ }));
+    expect(app.subView.a1).toBeNull();
+    expect(row).not.toHaveAttribute('aria-current');
+  });
+
+  it('indents a subagent’s subagent', () => {
+    resetApp({ agents: [agent({ plan: withSubs([sub('s1'), sub('s2', { parent: 's1' })]) })] });
+    fakeBackend();
+    render(Sidebar, { project: project() });
+    expect(screen.getByRole('button', { name: /sous-agent s1/ }).style.getPropertyValue('--depth')).toBe('0');
+    expect(screen.getByRole('button', { name: /sous-agent s2/ }).style.getPropertyValue('--depth')).toBe('1');
+  });
+
+  it('speaks English', async () => {
+    setLang('en');
+    resetApp({ agents: [agent({ plan: withSubs([sub('s1'), sub('s2', { status: 'failed', endedAt: 2 })]) })] });
+    fakeBackend();
+    render(Sidebar, { project: project() });
+    const toggle = within(screen.getByRole('group', { name: 'Subagents of refacto-auth' })).getByRole('button', { name: /^Subagents/ });
+    expect(toggle).toHaveTextContent('Subagents 1 running 1 finished');
+    await userEvent.click(screen.getByRole('button', { name: '1 finished subagent' }));
+    expect(screen.getByRole('button', { name: /sous-agent s2/ })).toHaveTextContent('Failed');
+  });
+
+  describe('when there are many', () => {
+    const many = (count: number, over: Record<string, unknown> = {}, from = 1) =>
+      Array.from({ length: count }, (_, i) => sub(`s${from + i}`, { ...over, ...(over.status ? { endedAt: 1000 - i } : {}) }));
+    /** The rows of subagents (not the buttons that fold and unroll). */
+    const subRows = () => [...group().querySelectorAll<HTMLElement>('.sub')];
+    const unrollFinished = () => userEvent.click(screen.getByRole('button', { name: /sous-agents? finis?$/ }));
+
+    it('shows five of those running, then a button for the others that unrolls them', async () => {
+      resetApp({ agents: [agent({ plan: withSubs(many(12)) })] });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      expect(fold()).toHaveTextContent('12 en cours');
+      expect(subRows().map((r) => r.textContent?.trim())).toEqual(['s1', 's2', 's3', 's4', 's5'].map((s) => `sous-agent ${s}`));
+      const more = within(group()).getByRole('button', { name: '7 autres en cours' });
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      // The button comes after the rows it hides.
+      expect(more.compareDocumentPosition(subRows()[4]) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+      await userEvent.click(more);
+      expect(subRows()).toHaveLength(12);
+      expect(subRows()[11]).toHaveTextContent('sous-agent s12');
+      // The same button, still there to fold them back: the focus does not go with it.
+      expect(more).toBeInTheDocument();
+      expect(more).toHaveAttribute('aria-expanded', 'true');
+      expect(more).toHaveTextContent('Réduire');
+      expect(more).toHaveFocus();
+      await userEvent.click(more);
+      expect(subRows()).toHaveLength(5);
+      expect(more).toHaveTextContent('7 autres en cours');
+    });
+
+    it('has no button for five running, and says one other in the singular for six', () => {
+      resetApp({ agents: [agent({ plan: withSubs(many(5)) })] });
+      fakeBackend();
+      const { unmount } = render(Sidebar, { project: project() });
+      expect(subRows()).toHaveLength(5);
+      expect(within(group()).queryByRole('button', { name: /autres? en cours/ })).not.toBeInTheDocument();
+      unmount();
+      resetApp({ agents: [agent({ plan: withSubs(many(6)) })] });
+      render(Sidebar, { project: project() });
+      expect(subRows()).toHaveLength(5);
+      expect(within(group()).getByRole('button', { name: '1 autre en cours' })).toBeInTheDocument();
+    });
+
+    it('shows ten of those finished once unfolded, then a button for the rest that unrolls them', async () => {
+      resetApp({ agents: [agent({ plan: withSubs(many(15, { status: 'done' })) })] });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      await userEvent.click(fold());
+      await unrollFinished();
+      // The latest ended first.
+      expect(subRows()).toHaveLength(10);
+      expect(subRows()[0]).toHaveTextContent('sous-agent s1');
+      const more = within(group()).getByRole('button', { name: '5 de plus' });
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      await userEvent.click(more);
+      expect(subRows()).toHaveLength(15);
+      expect(more).toHaveAttribute('aria-expanded', 'true');
+      await userEvent.click(more);
+      expect(subRows()).toHaveLength(10);
+    });
+
+    it('has no button for ten finished', async () => {
+      resetApp({ agents: [agent({ plan: withSubs(many(10, { status: 'done' })) })] });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      await userEvent.click(fold());
+      await unrollFinished();
+      expect(subRows()).toHaveLength(10);
+      expect(within(group()).queryByRole('button', { name: /de plus/ })).not.toBeInTheDocument();
+    });
+
+    it('caps the running and the finished lists on their own', async () => {
+      resetApp({ agents: [agent({ plan: withSubs([...many(8), ...many(12, { status: 'done' }, 100)]) })] });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      await unrollFinished();
+      // Five running and ten finished, each list with its button.
+      expect(subRows()).toHaveLength(15);
+      expect(within(group()).getByRole('button', { name: '3 autres en cours' })).toBeInTheDocument();
+      expect(within(group()).getByRole('button', { name: '2 de plus' })).toBeInTheDocument();
+      await userEvent.click(within(group()).getByRole('button', { name: '2 de plus' }));
+      expect(subRows()).toHaveLength(17);
+    });
+
+    it('unrolls the list of one agent, not of the others', async () => {
+      resetApp({
+        agents: [agent({ plan: withSubs(many(8)) }), agent({ id: 'a2', name: 'tests-e2e', createdAt: 2, plan: withSubs(many(8, {}, 50)) })],
+      });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      await userEvent.click(within(group()).getByRole('button', { name: '3 autres en cours' }));
+      expect(subRows()).toHaveLength(8);
+      const other = screen.getByRole('group', { name: 'Sous-agents de tests-e2e' });
+      expect(other.querySelectorAll('.sub')).toHaveLength(5);
+      expect(within(other).getByRole('button', { name: '3 autres en cours' })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('speaks English', async () => {
+      setLang('en');
+      resetApp({ agents: [agent({ plan: withSubs([...many(7), ...many(11, { status: 'done' }, 100)]) })] });
+      fakeBackend();
+      render(Sidebar, { project: project() });
+      const more = within(group('Subagents of refacto-auth')).getByRole('button', { name: '2 more running' });
+      await userEvent.click(more);
+      expect(more).toHaveTextContent('Show fewer');
+      await userEvent.click(screen.getByRole('button', { name: '11 finished subagents' }));
+      expect(within(group('Subagents of refacto-auth')).getByRole('button', { name: '1 more' })).toBeInTheDocument();
+    });
   });
 });

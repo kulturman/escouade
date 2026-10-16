@@ -13,6 +13,10 @@
 //!   the window (a confirmation): here it is refused, and the refusal says which tickets;
 //! - an agent never writes to nor stops itself, and acts on its own project alone (it reads the
 //!   others: the tools that read are open);
+//! - a project's Kanban settings are set as the window's form sets them (`set_board`, the same
+//!   function of the core), under its checks; what runs without a question stays the user's, given
+//!   in the window: the mode `bypassPermissions` (kept when the Kanban is on it already) and the
+//!   test command, which tests first needs (the server sets none);
 //! - a message sent to an agent, and the first one of an agent created, reach it under its author's
 //!   name (« Message de <author> : »): never as the user's own words;
 //! - an agent's request (a permission, a question, a plan) is answered as the window's card does,
@@ -20,29 +24,47 @@
 //!   user's), never by the agent that asked, and only once: a request that no longer waits (the user
 //!   or another client answered it, the agent stopped) or one of an agent in the Claude Code view
 //!   (its interface asks in its terminal) is refused with the reason. The card of the conversation
-//!   says who answered, and a refusal tells Claude who refused.
+//!   says who answered, and a refusal tells Claude who refused;
+//! - the tools of the board's flow (`approve_ticket`, `reject_ticket`, `resume_ticket`,
+//!   `resolve_conflict`, `dismiss_block`, `delete_ticket`) act as the window's buttons do and are
+//!   refused where the window refuses, in its words (`delete_ticket` also while the ticket's approval
+//!   runs: it would go on without it); all but the last answer the ticket and its `since`, for
+//!   `wait_ticket`. An agent never approves nor sends back its own ticket, nor acts on it with the
+//!   others: that is the user's, or another client's. What the flow sends to an agent (a ticket sent
+//!   back, resumed, a conflict handed over) goes only while the agent's account is not held back, and
+//!   a ticket sent back says who sent it back.
 //!
 //! A refusal (`ToolError::Refused`) is a guard saying no; a failure (`ToolError::Failed`) is
 //! something asked that does not fit (a name, an empty title…). `report_progress` and
 //! `split_ticket` are for the agents of Escouade alone.
 
 use super::activity;
-use super::read::{answerable, asked_questions, json, request_type, ticket_view, todo_keys};
+use super::images;
+use super::read::{
+    answerable, asked_questions, board_view, json, request_type, ticket_view, todo_keys, TicketView,
+};
 use super::resolve;
 use super::tools::{
-    AnswerPermissionArgs, AnswerQuestionArgs, CreateAgentArgs, CreateTicketArgs, DecisionArg,
-    MoveTicketArgs, PositionArg, QuestionAnswer, ReportProgressArgs, SendMessageArgs,
-    SplitTicketArgs, StartTicketArgs, StopAgentArgs, SubTicket, ToolError, UpdateTicketArgs,
-    SPLIT_MAX,
+    AnswerPermissionArgs, AnswerQuestionArgs, ApproveTicketArgs, CreateAgentArgs, CreateTicketArgs,
+    DecisionArg, DeleteTicketArgs, DismissBlockArgs, MoveTicketArgs, PositionArg, QuestionAnswer,
+    RejectTicketArgs, ReportProgressArgs, ResolveConflictArgs, ResumeTicketArgs, SendMessageArgs,
+    SetBoardArgs, SplitTicketArgs, StartTicketArgs, StopAgentArgs, SubTicket, ToolError,
+    UpdateTicketArgs, SPLIT_MAX,
 };
+use super::wait;
 use super::Caller;
 use crate::accounts;
 use crate::agent::Waiting;
 use crate::board::{Held, MoveTo};
-use crate::core::{AgentOptions, Core};
+use crate::core::{supports_effort, AgentOptions, Core};
+use crate::git;
 use crate::i18n;
-use crate::model::{Column, PauseReason, Project, PROGRESS_LINE_MAX};
-use crate::tickets::{title_missing, TicketDraft};
+use crate::model::{BoardSettings, Column, PauseReason, Project, Ticket, PROGRESS_LINE_MAX};
+use crate::telemetry::Event;
+use crate::tickets::{
+    comment_missing, only_todo_is_edited, ticket_agent_options, title_missing, Refusal, TicketDraft,
+};
+use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 use tauri::Runtime;
@@ -77,7 +99,7 @@ fn agent_only(caller: &Caller) -> Result<&str, ToolError> {
 
 /// An agent of Escouade acts on its own project alone (it may read the others); Claude outside
 /// Escouade acts on any.
-fn own_project_only<R: Runtime>(
+pub(super) fn own_project_only<R: Runtime>(
     core: &Core<R>,
     caller: &Caller,
     project_id: &str,
@@ -421,6 +443,11 @@ pub(super) async fn create_ticket<R: Runtime>(
         after: after_ids(core, &project, a.after.as_deref().unwrap_or_default())?,
         // Its own branch: the tools do not name an existing one.
         branch: String::new(),
+        // Last: files named by a path are read only once the rest is checked.
+        images: match a.images {
+            Some(list) => Some(images::drafts(core, caller, list, 0).await?),
+            None => None,
+        },
     };
     let made = core
         .ticket_create(&project.id, draft)
@@ -429,18 +456,30 @@ pub(super) async fn create_ticket<R: Runtime>(
     json(&ticket_view(core, &made))
 }
 
-/// `update_ticket`: the fields given replace the ticket's; the others stay.
-pub(super) fn update_ticket<R: Runtime>(
+/// `update_ticket`: the fields given replace the ticket's; the others stay. Its images are added to
+/// (`addImages`) or taken from (`removeImages`), the ones not named kept.
+pub(super) async fn update_ticket<R: Runtime>(
     core: &Arc<Core<R>>,
     caller: &Caller,
     a: UpdateTicketArgs,
 ) -> Result<String, ToolError> {
     let t = resolve::ticket(core, &a.ticket)?;
     own_project_only(core, caller, &t.project_id)?;
-    if a.title.is_none() && a.description.is_none() && a.criteria.is_none() && a.after.is_none() {
+    // An empty list is none given.
+    let (add, remove) = (
+        a.add_images.unwrap_or_default(),
+        a.remove_images.unwrap_or_default(),
+    );
+    if a.title.is_none()
+        && a.description.is_none()
+        && a.criteria.is_none()
+        && a.after.is_none()
+        && add.is_empty()
+        && remove.is_empty()
+    {
         return Err(ToolError::Failed(tr!(
-            "Rien à modifier : donne au moins un des champs title, description, criteria ou after.",
-            "Nothing to change: give at least one of the fields title, description, criteria or after."
+            "Rien à modifier : donne au moins un des champs title, description, criteria, after, addImages ou removeImages.",
+            "Nothing to change: give at least one of the fields title, description, criteria, after, addImages or removeImages."
         )));
     }
     let project = project_of(core, &t.project_id)?;
@@ -454,7 +493,7 @@ pub(super) fn update_ticket<R: Runtime>(
         None if edited => without_origin(&t.description).to_string(),
         None => t.description.clone(),
     };
-    let draft = TicketDraft {
+    let mut draft = TicketDraft {
         title: match &a.title {
             Some(new) => title(new)?,
             None => t.title.clone(),
@@ -476,8 +515,23 @@ pub(super) fn update_ticket<R: Runtime>(
         },
         // Not the tools' to change: the ticket keeps the branch the window gave it.
         branch: t.branch.clone(),
+        // Its images stay as they are unless a list is built below.
+        images: None,
     };
-    let updated = core.ticket_update(&t.id, draft).map_err(refusal)?;
+    if !add.is_empty() || !remove.is_empty() {
+        // The core refuses a ticket that has started too, but only once the files are read: said
+        // first, as the core says it, before a file or a reference is looked at.
+        if t.column != Column::Todo {
+            return Err(refusal(only_todo_is_edited()));
+        }
+        draft.images = Some(images::amended(core, caller, &t, add, &remove).await?);
+    }
+    // It writes and removes the images' files: off the async workers, as the window's command does.
+    let (c, id) = (core.clone(), t.id.clone());
+    let updated = tokio::task::spawn_blocking(move || c.ticket_update(&id, draft))
+        .await
+        .map_err(|e| failure(e.into()))?
+        .map_err(refusal)?;
     json(&ticket_view(core, &updated))
 }
 
@@ -525,6 +579,9 @@ pub(super) fn start_ticket<R: Runtime>(
 ) -> Result<String, ToolError> {
     let t = resolve::ticket(core, &a.ticket)?;
     own_project_only(core, caller, &t.project_id)?;
+    // Before anything: a model or an effort that does not fit starts nothing, writes nothing.
+    let model = model_setting(core, a.model.as_deref())?;
+    let effort = effort_setting(i18n::ui(), a.effort.as_deref())?;
     // A ticket that left « À faire » is told so by the core.
     if t.column == Column::Todo {
         not_held(core, &t.project_id)?;
@@ -568,8 +625,607 @@ pub(super) fn start_ticket<R: Runtime>(
             )));
         }
     }
-    core.ticket_start(&t.id).map_err(refusal)?;
-    json(&json!({ "key": t.key, "starting": true }))
+    core.ticket_start_with(&t.id, model, effort)
+        .map_err(refusal)?;
+    // What its agent goes with: its ticket's own, else its Kanban's, else the app's.
+    let started = core.ticket(&t.id).unwrap_or(t);
+    let board = project_of(core, &started.project_id)?.board;
+    let (model, effort, _) = ticket_agent_options(&started, &board, &core.settings.read());
+    let mut answer = json!({ "key": started.key, "starting": true, "model": model });
+    // A model that takes no effort (Haiku) goes without one: none is said.
+    if supports_effort(&model) {
+        answer["effort"] = json!(effort);
+    }
+    json(&answer)
+}
+
+// ---------- the Kanban's settings ----------
+
+/// The efforts Claude Code takes (`--effort`).
+const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// The modes a Kanban may be set to here: `bypassPermissions` is the user's to choose, in the
+/// window (`mode_setting`).
+const MODES: [&str; 4] = ["auto", "default", "plan", "acceptEdits"];
+/// The most branches an error lists: a repository may have hundreds.
+const BRANCHES_LISTED: usize = 20;
+
+/// A model given for a Kanban's agents or a ticket's: `None` when left out, an empty one when it
+/// goes back to the default, else one the app offers (`model`).
+fn model_setting<R: Runtime>(
+    core: &Core<R>,
+    asked: Option<&str>,
+) -> Result<Option<String>, ToolError> {
+    asked
+        .map(|m| model(core, Some(m)).map(Option::unwrap_or_default))
+        .transpose()
+}
+
+/// An effort given for a Kanban's agents or a ticket's: `None` when left out, an empty one when it
+/// goes back to the default, else one of `EFFORTS` (in any case).
+fn effort_setting(lang: i18n::Lang, asked: Option<&str>) -> Result<Option<String>, ToolError> {
+    let Some(asked) = asked.map(str::trim) else {
+        return Ok(None);
+    };
+    if asked.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    match EFFORTS.iter().find(|e| e.eq_ignore_ascii_case(asked)) {
+        Some(effort) => Ok(Some(effort.to_string())),
+        None => Err(ToolError::Failed(tr_in!(
+            lang,
+            "Effort « {asked} » inconnu. Efforts : {choices}.",
+            "Unknown effort “{asked}”. Efforts: {choices}.",
+            choices = EFFORTS.join(", ")
+        ))),
+    }
+}
+
+/// A mode given for a Kanban's agents: `None` when left out, an empty one when it goes back to the
+/// default, else one of `MODES`. `bypassPermissions` (no permission request at all) is the user's
+/// decision, taken in the window: refused, unless `current`, the Kanban's own, already is it.
+fn mode_setting(
+    lang: i18n::Lang,
+    current: &str,
+    asked: Option<&str>,
+) -> Result<Option<String>, ToolError> {
+    let Some(asked) = asked.map(str::trim) else {
+        return Ok(None);
+    };
+    if asked.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    if asked.eq_ignore_ascii_case("bypassPermissions") {
+        if current == "bypassPermissions" {
+            return Ok(Some(current.to_string()));
+        }
+        return Err(ToolError::Refused(tr_in!(
+            lang,
+            "Lancer des agents sans aucune demande de permission est une décision de l’utilisateur : le mode bypassPermissions se règle dans la fenêtre (Réglages › Kanban).",
+            "Running agents with no permission request at all is the user’s decision: set the mode bypassPermissions in the window (Settings › Kanban)."
+        )));
+    }
+    match MODES.iter().find(|m| m.eq_ignore_ascii_case(asked)) {
+        Some(mode) => Ok(Some(mode.to_string())),
+        None => Err(ToolError::Failed(tr_in!(
+            lang,
+            "Mode « {asked} » inconnu. Modes : {choices}.",
+            "Unknown mode “{asked}”. Modes: {choices}.",
+            choices = MODES.join(", ")
+        ))),
+    }
+}
+
+/// A target branch given for a Kanban: `None` when left out or when it leaves the Kanban's as it
+/// is, else one of the project's local `branches`, trimmed. It leaves it as it is when it is the
+/// Kanban's own (`kept`, even a branch deleted since, or none) or what `get_board` shows while the
+/// Kanban has none (`current`, the branch the project is on): giving back what `get_board` said
+/// is no change, nor a refusal.
+fn target_setting(
+    lang: i18n::Lang,
+    kept: &str,
+    current: &str,
+    branches: &[String],
+    asked: Option<&str>,
+) -> Result<Option<String>, ToolError> {
+    let Some(asked) = asked.map(str::trim) else {
+        return Ok(None);
+    };
+    if asked == kept || (kept.is_empty() && asked == current) {
+        return Ok(None);
+    }
+    if asked.is_empty() {
+        return Err(ToolError::Failed(tr_in!(
+            lang,
+            "La branche cible ne peut pas être vide : donne une branche locale du projet, ou laisse target de côté pour garder l’actuelle.",
+            "The target branch cannot be empty: give a local branch of the project, or leave target out to keep the current one."
+        )));
+    }
+    if branches.iter().any(|b| b == asked) {
+        return Ok(Some(asked.to_string()));
+    }
+    let listed = branches
+        .iter()
+        .take(BRANCHES_LISTED)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let choices = match branches.len() {
+        n if n > BRANCHES_LISTED => {
+            tr_in!(
+                lang,
+                "{listed}, … ({n} au total)",
+                "{listed}, … ({n} in all)"
+            )
+        }
+        _ => listed,
+    };
+    Err(ToolError::Failed(tr_in!(
+        lang,
+        "« {asked} » n’est pas une branche locale du projet. Branches : {choices}.",
+        "“{asked}” is not a local branch of the project. Branches: {choices}."
+    )))
+}
+
+/// The Kanban settings `a` asks for, over `board`: only the fields given change. Checked as the
+/// window's form is (the model through `model_setting`, given as `model`: empty is the app's), and
+/// what is the user's alone stays so (`mode_setting`, and tests first, which needs a test command
+/// the server does not set). `branches` are the project's local ones and `current` the one it is on
+/// (empty on a detached HEAD): git is read only for a target that is not the Kanban's (`set_board`).
+/// Nothing is returned for a change when one field is refused.
+pub(super) fn board_change(
+    lang: i18n::Lang,
+    board: &BoardSettings,
+    branches: &[String],
+    current: &str,
+    a: &SetBoardArgs,
+    model: Option<String>,
+) -> Result<BoardSettings, ToolError> {
+    let nothing = a.action.is_none()
+        && a.target.is_none()
+        && a.strategy.is_none()
+        && a.draft.is_none()
+        && a.cleanup.is_none()
+        && a.conventional.is_none()
+        && a.conflict.is_none()
+        && a.max_parallel.is_none()
+        && a.autopilot.is_none()
+        && model.is_none()
+        && a.effort.is_none()
+        && a.mode.is_none()
+        && a.tests_first.is_none();
+    if nothing {
+        return Err(ToolError::Failed(tr_in!(
+            lang,
+            "Donne au moins un réglage à changer : action, target, strategy, draft, cleanup, conventional, conflict, maxParallel, autopilot, model, effort, mode ou testsFirst.",
+            "Give at least one setting to change: action, target, strategy, draft, cleanup, conventional, conflict, maxParallel, autopilot, model, effort, mode or testsFirst."
+        )));
+    }
+    let effort = effort_setting(lang, a.effort.as_deref())?;
+    let mode = mode_setting(lang, &board.mode, a.mode.as_deref())?;
+    let target = target_setting(lang, &board.target, current, branches, a.target.as_deref())?;
+    if let Some(n) = a.max_parallel.filter(|n| !(1..=6).contains(n)) {
+        return Err(ToolError::Failed(tr_in!(
+            lang,
+            "Le maximum de tickets en parallèle va de 1 à 6 ({n} donné).",
+            "The most tickets in parallel goes from 1 to 6 ({n} given)."
+        )));
+    }
+    // Only turning it on needs a command: one already on (the window shows it off with no command,
+    // as `get_board` does) is taken as it is.
+    if a.tests_first == Some(true) && !board.tests_first && board.test_command.trim().is_empty() {
+        return Err(ToolError::Refused(tr_in!(
+            lang,
+            "Le Kanban n’a pas de commande de test, et le serveur n’en lance aucune : règle-la dans la fenêtre (Réglages › Kanban), puis active « Relancer les tests avant ».",
+            "The Kanban has no test command, and the server runs none: set it in the window (Settings › Kanban), then turn on “Re-run the tests first”."
+        )));
+    }
+    let mut s = board.clone();
+    if let Some(action) = a.action {
+        s.action = action.name().into();
+    }
+    if let Some(target) = target {
+        s.target = target;
+    }
+    if let Some(strategy) = a.strategy {
+        s.strategy = strategy.name().into();
+    }
+    if let Some(conflict) = a.conflict {
+        s.conflict = conflict.name().into();
+    }
+    s.draft = a.draft.unwrap_or(s.draft);
+    s.cleanup = a.cleanup.unwrap_or(s.cleanup);
+    s.conventional = a.conventional.unwrap_or(s.conventional);
+    s.max_parallel = a.max_parallel.unwrap_or(s.max_parallel);
+    s.autopilot = a.autopilot.unwrap_or(s.autopilot);
+    // Asked as `get_board` shows it: left as it is.
+    if let Some(on) = a.tests_first.filter(|on| *on != board.tests_first_on()) {
+        s.tests_first = on;
+    }
+    if let Some(model) = model {
+        s.model = model;
+    }
+    if let Some(effort) = effort {
+        s.effort = effort;
+    }
+    if let Some(mode) = mode {
+        s.mode = mode;
+    }
+    Ok(s)
+}
+
+/// What `after` changes of `before`, as the activity log says it: each setting `set_board` sets that
+/// has changed, « name: before → after », in the order of the tool's arguments; else that nothing
+/// did. A model, an effort or a mode left empty is the app's (« (défaut) »), a target left empty
+/// is none. Tests first is the one `get_board` shows: on only with a test command to run.
+pub(super) fn board_changes(
+    lang: i18n::Lang,
+    before: &BoardSettings,
+    after: &BoardSettings,
+) -> String {
+    let default = tr_in!(lang, "(défaut)", "(default)");
+    let none = tr_in!(lang, "(aucune)", "(none)");
+    let said = |value: &str, empty: &str| match value {
+        "" => empty.to_string(),
+        value => value.to_string(),
+    };
+    let on = |b: &BoardSettings| b.tests_first_on().to_string();
+    let rows = [
+        ("action", before.action.clone(), after.action.clone()),
+        (
+            "target",
+            said(&before.target, &none),
+            said(&after.target, &none),
+        ),
+        ("strategy", before.strategy.clone(), after.strategy.clone()),
+        ("draft", before.draft.to_string(), after.draft.to_string()),
+        (
+            "cleanup",
+            before.cleanup.to_string(),
+            after.cleanup.to_string(),
+        ),
+        (
+            "conventional",
+            before.conventional.to_string(),
+            after.conventional.to_string(),
+        ),
+        ("conflict", before.conflict.clone(), after.conflict.clone()),
+        (
+            "maxParallel",
+            before.max_parallel.to_string(),
+            after.max_parallel.to_string(),
+        ),
+        (
+            "autopilot",
+            before.autopilot.to_string(),
+            after.autopilot.to_string(),
+        ),
+        (
+            "model",
+            said(&before.model, &default),
+            said(&after.model, &default),
+        ),
+        (
+            "effort",
+            said(&before.effort, &default),
+            said(&after.effort, &default),
+        ),
+        (
+            "mode",
+            said(&before.mode, &default),
+            said(&after.mode, &default),
+        ),
+        ("testsFirst", on(before), on(after)),
+    ];
+    let changed: Vec<String> = rows
+        .into_iter()
+        .filter(|(_, from, to)| from != to)
+        .map(|(name, from, to)| format!("{name}: {from} → {to}"))
+        .collect();
+    if changed.is_empty() {
+        return tr_in!(
+            lang,
+            "Aucun changement : le Kanban était déjà réglé ainsi.",
+            "No change: the Kanban was already set so."
+        );
+    }
+    changed.join(" · ")
+}
+
+/// `set_board`: the window's Settings › Kanban, through the same function of the core (the window
+/// is told, the board saved and scheduled again). Answers the settings as `get_board` does, and
+/// what changed, for the activity log (`board_changes`).
+pub(super) async fn set_board<R: Runtime>(
+    core: &Arc<Core<R>>,
+    caller: &Caller,
+    a: SetBoardArgs,
+) -> Result<(String, String), ToolError> {
+    let project = resolve::project(core, &a.project)?;
+    own_project_only(core, caller, &project.id)?;
+    let model = model_setting(core, a.model.as_deref())?;
+    // Git is read only for a target that is not the Kanban's own: giving that one back needs no
+    // repository at all.
+    let kept = core.project(&project.id).map_err(failure)?.board.target;
+    let (branches, current) = match a.target.as_deref().map(str::trim) {
+        Some(asked) if asked != kept => (
+            git::branches(&project.path).await.map_err(failure)?,
+            git::head_branch(&project.path).await,
+        ),
+        _ => (Vec::new(), String::new()),
+    };
+    // The Kanban as it is now: what the window changed meanwhile is not written over.
+    let board = core.project(&project.id).map_err(failure)?.board;
+    let changed = board_change(i18n::ui(), &board, &branches, &current, &a, model)?;
+    let saved = core.board_set(&project.id, changed).map_err(failure)?;
+    let changes = board_changes(i18n::ui(), &board, &saved.board);
+    Ok((json(&board_view(core, &saved).await)?, changes))
+}
+
+// ---------- the board's flow ----------
+
+/// An agent does not act on its own ticket: the one it works on (its ticket names it, or its own
+/// record names the ticket). `why` says it, in the words of the tool.
+fn not_own_ticket<R: Runtime>(
+    core: &Core<R>,
+    caller: &Caller,
+    t: &Ticket,
+    why: String,
+) -> Result<(), ToolError> {
+    let Caller::Agent(id) = caller else {
+        return Ok(());
+    };
+    let own = t.agent_id.as_deref() == Some(id.as_str())
+        || core
+            .agent(id)
+            .is_ok_and(|h| h.lock().meta.ticket_id.as_deref() == Some(t.id.as_str()));
+    if own {
+        return Err(ToolError::Refused(why));
+    }
+    Ok(())
+}
+
+/// What an agent is told when it acts on its own ticket with a tool of the flow that is neither the
+/// approval nor the sending back.
+fn own_ticket_with_this_tool() -> String {
+    tr!(
+        "Un agent n’agit pas sur son propre ticket avec cet outil : c’est à l’utilisateur ou à un autre client de le faire.",
+        "An agent does not act on its own ticket with this tool: the user or another client does."
+    )
+}
+
+/// The ticket's agent, unless it is gone or archived: the one a message of the flow reaches.
+fn live_agent_of<R: Runtime>(core: &Core<R>, t: &Ticket) -> Option<resolve::AgentRef> {
+    let h = core.agent(t.agent_id.as_deref()?).ok()?;
+    let rt = h.lock();
+    (!rt.meta.archived).then(|| resolve::AgentRef::of(&rt.meta))
+}
+
+/// The agent is at work: the core refuses first, in the window's words, held account or not.
+fn at_work<R: Runtime>(core: &Core<R>, agent: &resolve::AgentRef) -> bool {
+    core.agent(&agent.id)
+        .is_ok_and(|h| h.lock().meta.status.is_active())
+}
+
+/// The error of a call of the core that ends by sending the ticket's agent a message
+/// (`Core::send_or_block`): the ticket moves first (sent back, unblocked, handed over), then is
+/// blocked with the reason when the message fails. Once it differs from `before` in its column or
+/// its block, the call is told as taken into account; else it is the refusal it looks like.
+fn unsent<R: Runtime>(core: &Core<R>, before: &Ticket, e: anyhow::Error) -> ToolError {
+    let moved = core
+        .ticket(&before.id)
+        .is_ok_and(|now| now.column != before.column || now.blocked != before.blocked);
+    if !moved {
+        return refusal(e);
+    }
+    // (The error's own full stop is the sentence's.)
+    let (key, e) = (&before.key, format!("{e:#}"));
+    let e = e.trim_end().trim_end_matches('.');
+    ToolError::Failed(tr!(
+        "{key} a été pris en compte, mais son agent n’a pas reçu le message : {e}. Le ticket est bloqué avec cette raison.",
+        "{key} was taken into account, but its agent did not get the message: {e}. The ticket is blocked with that reason."
+    ))
+}
+
+/// What an action of the flow answers: the ticket as `get_ticket` gives it, and its `since`.
+#[derive(Serialize)]
+struct Answered {
+    #[serde(flatten)]
+    ticket: TicketView,
+    since: String,
+}
+
+/// The ticket as `get_ticket` answers it now, once the core did what was asked, and `since`: the
+/// `wait_ticket` cursor of the ticket as it was before (`wait::since`). What the action sets off
+/// may be over before the client waits for it (a quick approval): from this cursor the wait is told
+/// of it all the same.
+fn answer<R: Runtime>(core: &Core<R>, id: &str, since: String) -> Result<String, ToolError> {
+    let ticket = ticket_view(core, &core.ticket(id).map_err(failure)?);
+    json(&Answered { ticket, since })
+}
+
+/// `approve_ticket`: the window's « Valider… ». Answers once the approval has started: its tests,
+/// commit, merge or push go on in the background, and are followed on the ticket.
+pub(super) fn approve_ticket<R: Runtime>(
+    core: &Arc<Core<R>>,
+    caller: &Caller,
+    a: ApproveTicketArgs,
+) -> Result<String, ToolError> {
+    let t = resolve::ticket(core, &a.ticket)?;
+    own_project_only(core, caller, &t.project_id)?;
+    // Its own work merged without a review: that is the user's call.
+    not_own_ticket(
+        core,
+        caller,
+        &t,
+        tr!(
+            "Un agent ne valide pas son propre ticket : il fusionnerait son travail sans relecture.",
+            "An agent does not approve its own ticket: it would merge its work without a review."
+        ),
+    )?;
+    let since = wait::since(core, &t);
+    core.ticket_approve_detached(&t.id).map_err(refusal)?;
+    // Counted in the usage statistics once it started, as the window's.
+    core.telemetry.track(Event::TicketApproved);
+    answer(core, &t.id, since)
+}
+
+/// `reject_ticket`: the window's « Renvoyer », the comment going to the ticket's agent followed by
+/// who sent the ticket back.
+pub(super) async fn reject_ticket<R: Runtime>(
+    core: &Arc<Core<R>>,
+    caller: &Caller,
+    a: RejectTicketArgs,
+) -> Result<String, ToolError> {
+    let t = resolve::ticket(core, &a.ticket)?;
+    own_project_only(core, caller, &t.project_id)?;
+    not_own_ticket(
+        core,
+        caller,
+        &t,
+        tr!(
+            "Un agent ne renvoie pas son propre ticket.",
+            "An agent does not send back its own ticket."
+        ),
+    )?;
+    let said = a.comment.trim().trim_end_matches('.').trim_end();
+    if said.is_empty() {
+        return Err(failure(comment_missing()));
+    }
+    // Where the window would go ahead, the comment reaches the agent: not while its account is held,
+    // unless the agent works, which the core refuses first.
+    if t.column == Column::Review && t.step.is_none() {
+        if let Some(agent) = live_agent_of(core, &t).filter(|a| !at_work(core, a)) {
+            account_not_held(core, &agent)?;
+        }
+    }
+    // Under its author's name: the agent is not to take it for the user's own words.
+    let origin = activity::caller_name(core, Some(caller));
+    let comment = tr_in!(
+        core.lang().claude,
+        "{said} (renvoyé par {origin} via Escouade)",
+        "{said} (sent back by {origin} through Escouade)"
+    );
+    let since = wait::since(core, &t);
+    core.ticket_reject(&t.id, &comment)
+        .await
+        .map_err(|e| unsent(core, &t, e))?;
+    answer(core, &t.id, since)
+}
+
+/// `resume_ticket`: the window's « Reprendre » on a blocked ticket « En cours ».
+pub(super) async fn resume_ticket<R: Runtime>(
+    core: &Arc<Core<R>>,
+    caller: &Caller,
+    a: ResumeTicketArgs,
+) -> Result<String, ToolError> {
+    let t = resolve::ticket(core, &a.ticket)?;
+    own_project_only(core, caller, &t.project_id)?;
+    not_own_ticket(core, caller, &t, own_ticket_with_this_tool())?;
+    // Where the window would go ahead: a message to the ticket's agent, else a new agent. One that
+    // waits for its quota is refused by the core, which says until when.
+    if t.column == Column::Doing && t.blocked.is_some() {
+        match live_agent_of(core, &t) {
+            Some(agent) => {
+                let waits = core
+                    .agent(&agent.id)
+                    .is_ok_and(|h| h.lock().meta.resume_at.is_some());
+                if !waits {
+                    account_not_held(core, &agent)?;
+                }
+            }
+            None => not_held(core, &t.project_id)?,
+        }
+    }
+    let since = wait::since(core, &t);
+    core.ticket_resume(&t.id)
+        .await
+        .map_err(|e| unsent(core, &t, e))?;
+    answer(core, &t.id, since)
+}
+
+/// `resolve_conflict`: the window's « L'agent résout » on a ticket « À tester » stopped on a
+/// conflict.
+pub(super) async fn resolve_conflict<R: Runtime>(
+    core: &Arc<Core<R>>,
+    caller: &Caller,
+    a: ResolveConflictArgs,
+) -> Result<String, ToolError> {
+    let t = resolve::ticket(core, &a.ticket)?;
+    own_project_only(core, caller, &t.project_id)?;
+    not_own_ticket(core, caller, &t, own_ticket_with_this_tool())?;
+    if t.column != Column::Review {
+        return Err(refusal(Refusal::NotInReview.into()));
+    }
+    if t.step.is_some() {
+        return Err(refusal(Refusal::ApprovingAlready.into()));
+    }
+    if !t.conflict {
+        return Err(ToolError::Refused(tr!(
+            "Ce ticket n’a pas de conflit à résoudre.",
+            "This ticket has no conflict to resolve."
+        )));
+    }
+    // Not while its account is held, unless the agent works, which the core refuses first.
+    if let Some(agent) = live_agent_of(core, &t).filter(|a| !at_work(core, a)) {
+        account_not_held(core, &agent)?;
+    }
+    let since = wait::since(core, &t);
+    core.ticket_resolve_conflict(&t.id)
+        .await
+        .map_err(|e| unsent(core, &t, e))?;
+    answer(core, &t.id, since)
+}
+
+/// `dismiss_block`: the window's « Annuler » on a blocked ticket « À tester ».
+pub(super) fn dismiss_block<R: Runtime>(
+    core: &Arc<Core<R>>,
+    caller: &Caller,
+    a: DismissBlockArgs,
+) -> Result<String, ToolError> {
+    let t = resolve::ticket(core, &a.ticket)?;
+    own_project_only(core, caller, &t.project_id)?;
+    not_own_ticket(core, caller, &t, own_ticket_with_this_tool())?;
+    if t.column != Column::Review {
+        return Err(refusal(Refusal::NotInReview.into()));
+    }
+    // The block of a step under way is not there yet, or is the last try's.
+    if t.step.is_some() {
+        return Err(refusal(Refusal::ApprovingAlready.into()));
+    }
+    if t.blocked.is_none() && !t.conflict {
+        return Err(ToolError::Refused(tr!(
+            "Ce ticket n’est pas bloqué.",
+            "This ticket isn’t blocked."
+        )));
+    }
+    let since = wait::since(core, &t);
+    core.ticket_dismiss(&t.id).map_err(refusal)?;
+    answer(core, &t.id, since)
+}
+
+/// `delete_ticket`: the window's « Supprimer », whatever the ticket's column.
+pub(super) async fn delete_ticket<R: Runtime>(
+    core: &Arc<Core<R>>,
+    caller: &Caller,
+    a: DeleteTicketArgs,
+) -> Result<String, ToolError> {
+    let t = resolve::ticket(core, &a.ticket)?;
+    own_project_only(core, caller, &t.project_id)?;
+    not_own_ticket(core, caller, &t, own_ticket_with_this_tool())?;
+    // Its approval would go on without it: merging a ticket that is gone.
+    if t.step.is_some() {
+        return Err(ToolError::Refused(tr!(
+            "La validation de ce ticket est en cours : attends sa fin pour le supprimer.",
+            "This ticket is being approved: wait for the end of its approval to delete it."
+        )));
+    }
+    // A ticket under way has its agent archived with it.
+    let agent = matches!(t.column, Column::Doing | Column::Review)
+        .then(|| live_agent_of(core, &t))
+        .flatten();
+    core.ticket_delete(&t.id).await.map_err(failure)?;
+    // Said as it is: an agent that could not be archived is only logged by the core.
+    let archived = agent.is_some_and(|a| core.agent(&a.id).is_ok_and(|h| h.lock().meta.archived));
+    json(&json!({ "key": t.key, "deleted": true, "agentArchived": archived }))
 }
 
 // ---------- agents ----------
@@ -1116,11 +1772,25 @@ fn sub_draft<R: Runtime>(
         max_loops: 0,
         after,
         branch: String::new(),
+        images: None,
     })
 }
 
+/// `e` as the `n`th ticket of `split_ticket`'s list.
+fn of_list(n: usize, e: ToolError) -> ToolError {
+    match e {
+        ToolError::Failed(why) | ToolError::Refused(why) => ToolError::Failed(tr!(
+            "Ticket {n} de la liste : {why}",
+            "Ticket {n} of the list: {why}"
+        )),
+    }
+}
+
 /// `split_ticket`: tickets « À faire » after the calling agent's own, one after the other (`chain`,
-/// the default) or all after it alone; answers their keys.
+/// the default) or all after it alone; answers their keys. Each gets copies of the images of the
+/// agent's ticket it asked for, all of them by default: by default an image whose file is gone is
+/// left out and said (the answer is then the keys with a note for each), while one that is named
+/// and cannot be copied fails the call.
 pub(super) async fn split_ticket<R: Runtime>(
     core: &Arc<Core<R>>,
     caller: &Caller,
@@ -1154,30 +1824,34 @@ pub(super) async fn split_ticket<R: Runtime>(
             "{SPLIT_MAX} tickets at most per call ({count} given)."
         )));
     }
-    // All checked before any is made.
+    // All checked before any is made: their words, the images of the ticket they take, and those
+    // images' files, which are read once.
     let mut drafts = Vec::with_capacity(count);
+    let mut picks = Vec::with_capacity(count);
     for (i, sub) in a.tickets.iter().enumerate() {
         let n = i + 1;
-        drafts.push(
-            sub_draft(core, caller, sub, Vec::new()).map_err(|e| match e {
-                ToolError::Failed(why) | ToolError::Refused(why) => ToolError::Failed(tr!(
-                    "Ticket {n} de la liste : {why}",
-                    "Ticket {n} of the list: {why}"
-                )),
-            })?,
-        );
+        drafts.push(sub_draft(core, caller, sub, Vec::new()).map_err(|e| of_list(n, e))?);
+        picks.push(images::chosen(&own.images, sub.images.as_deref()).map_err(|e| of_list(n, e))?);
     }
+    let handed = images::hand_down(core, &own, &picks)
+        .await
+        .map_err(|(i, e)| of_list(i + 1, e))?;
     let chain = a.chain.unwrap_or(true);
     let mut previous = own.id.clone();
     let mut made: Vec<String> = Vec::with_capacity(count);
-    for mut draft in drafts {
+    // The images taken by default whose files are gone, said one by one.
+    let mut skipped: Vec<String> = Vec::new();
+    for (mut draft, pick) in drafts.into_iter().zip(&picks) {
         draft.after = vec![if chain {
             previous.clone()
         } else {
             own.id.clone()
         }];
+        // Copies of its own: the core writes files in its folder.
+        draft.images = Some(handed.copies(pick)).filter(|copies| !copies.is_empty());
         match core.ticket_create(&own.project_id, draft).await {
             Ok(t) => {
+                skipped.extend(handed.left_out(&own, pick, &t.key));
                 previous = t.id;
                 made.push(t.key);
             }
@@ -1190,5 +1864,10 @@ pub(super) async fn split_ticket<R: Runtime>(
             }
         }
     }
-    json(&made)
+    // The keys alone when every image went; what was left out is said beside them otherwise.
+    if skipped.is_empty() {
+        json(&made)
+    } else {
+        json(&json!({ "tickets": made, "skipped": skipped }))
+    }
 }

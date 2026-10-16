@@ -1,6 +1,7 @@
 //! Tauri commands invoked by the frontend.
 
 use crate::accounts::{AccountStatus, ShareMode};
+use crate::closed::ClosedProjectInfo;
 use crate::core::{Attachment, Core, NotOnBase, SyncOp};
 use crate::fsedit;
 use crate::i18n::{self, Lang};
@@ -9,7 +10,7 @@ use crate::integrations::{
 };
 use crate::model::Account as ClaudeAccount;
 use crate::model::*;
-use crate::pty::{self, ShellInfo, TermInfo};
+use crate::pty::{self, ShellInfo, TermInfo, TermReport};
 use crate::search;
 use crate::stats::StatsView;
 use crate::telemetry::{self, Event};
@@ -24,11 +25,20 @@ use tauri::State;
 type Res<T> = Result<T, String>;
 
 /// A command's result, counted in the usage statistics when it went well (`telemetry`).
-fn counted<T>(core: &Core, event: Event, r: Res<T>) -> Res<T> {
+fn counted<T, R: tauri::Runtime>(core: &Core<R>, event: Event, r: Res<T>) -> Res<T> {
     if r.is_ok() {
         core.telemetry.track(event);
     }
     r
+}
+
+/// The project a folder was added as, counted as created unless a closed project's history came
+/// back with it (`Core::add_project`): that one is not new.
+fn project_added<R: tauri::Runtime>(core: &Core<R>, r: Res<(Project, bool)>) -> Res<Project> {
+    match r {
+        Ok((project, false)) => counted(core, Event::ProjectCreated, Ok(project)),
+        other => other.map(|(project, _)| project),
+    }
 }
 type CoreState<'a> = State<'a, Arc<Core>>;
 
@@ -150,7 +160,12 @@ pub fn set_ui(core: CoreState, ui: UiState) {
 /// changes them with the `account_*` commands).
 #[tauri::command(async)]
 pub fn save_settings(core: CoreState, settings: Settings) -> Res<Vec<ShellInfo>> {
+    let remote_was_on = core.settings.read().remote_control_all;
     core.save_window_settings(settings.clone()).map_err(err)?;
+    if settings.remote_control_all && !remote_was_on {
+        core.telemetry
+            .track(Event::RemoteControlEnabled { from: "global" });
+    }
     Ok(pty::detect_shells(&settings))
 }
 
@@ -259,16 +274,19 @@ pub async fn set_agent_view(core: CoreState<'_>, id: String, terminal: bool) -> 
 }
 
 /// The agent's Claude Code interface, in an interactive terminal (written to, resized and killed
-/// as the others: `term_write`, `term_resize`, `term_kill`).
+/// as the others: `term_write`, `term_resize`, `term_kill`). `manual`: the user asked for it
+/// (« Relancer »), as opposed to the window opening the view: an automatic start is refused once
+/// the interface stopped as soon as it started twice in a row.
 #[tauri::command]
 pub async fn agent_terminal(
     core: CoreState<'_>,
     id: String,
     cols: u16,
     rows: u16,
+    manual: Option<bool>,
     output: Channel<InvokeResponseBody>,
 ) -> Res<TermInfo> {
-    core.open_agent_terminal(&id, (cols, rows), move |bytes| {
+    core.open_agent_terminal(&id, (cols, rows), manual.unwrap_or(false), move |bytes| {
         let _ = output.send(InvokeResponseBody::Raw(bytes));
     })
     .await
@@ -289,26 +307,38 @@ pub struct FolderInfo {
     branch: String,
     dirty: u32,
     name: String,
+    /// The project closed in this folder, whose history adding a project there gives back.
+    history: Option<ClosedProjectInfo>,
 }
 
+/// Always `Ok`: an async command that borrows the state must return a `Result`. `history_id`: the
+/// closed project of this folder the window means to bring back, if it has several.
 #[tauri::command]
-pub async fn inspect_folder(path: String) -> FolderInfo {
+pub async fn inspect_folder(
+    core: CoreState<'_>,
+    path: String,
+    history_id: Option<String>,
+) -> Res<FolderInfo> {
     let p = std::path::Path::new(path.trim());
     let name = p
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     if !p.is_dir() {
-        return FolderInfo {
+        return Ok(FolderInfo {
             exists: false,
             is_repo: false,
             branch: String::new(),
             dirty: 0,
             name,
-        };
+            history: None,
+        });
     }
     let path = path.trim().to_string();
-    match crate::git::toplevel(&path).await {
+    let history = core
+        .closed_project_info_for(&path, history_id.as_deref())
+        .await;
+    Ok(match crate::git::toplevel(&path).await {
         Some(_) => {
             let st = crate::git::status(&path).await.unwrap_or_default();
             FolderInfo {
@@ -317,6 +347,7 @@ pub async fn inspect_folder(path: String) -> FolderInfo {
                 branch: st.branch,
                 dirty: st.entries.len() as u32,
                 name,
+                history,
             }
         }
         None => FolderInfo {
@@ -325,11 +356,17 @@ pub async fn inspect_folder(path: String) -> FolderInfo {
             branch: String::new(),
             dirty: 0,
             name,
+            history,
         },
-    }
+    })
 }
 
+/// `restore`: the history of a project closed in this folder comes back with it (the default);
+/// false starts a project of its own, the history staying among the closed projects.
+/// `history_id`: which of the folder's histories comes back, when it has several (else the latest
+/// closed).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_project(
     core: CoreState<'_>,
     path: String,
@@ -337,17 +374,34 @@ pub async fn create_project(
     color: String,
     worktree_per_agent: bool,
     first_agent: Option<String>,
+    restore: Option<bool>,
+    history_id: Option<String>,
 ) -> Res<Project> {
     let r = core
-        .create_project(&path, &name, &color, worktree_per_agent, first_agent)
+        .add_project(
+            &path,
+            &name,
+            &color,
+            worktree_per_agent,
+            first_agent,
+            restore.unwrap_or(true),
+            history_id,
+        )
         .await
         .map_err(err);
-    counted(&core, Event::ProjectCreated, r)
+    project_added(&core, r)
 }
 
 #[tauri::command(async)]
 pub fn update_project(core: CoreState, project: Project) -> Res<()> {
-    core.update_project(project).map_err(err)
+    let remote_was_on = core.project(&project.id).is_ok_and(|p| p.remote_control);
+    let remote_on = project.remote_control;
+    core.update_project(project).map_err(err)?;
+    if remote_on && !remote_was_on {
+        core.telemetry
+            .track(Event::RemoteControlEnabled { from: "project" });
+    }
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -355,9 +409,29 @@ pub fn reorder_projects(core: CoreState, ids: Vec<String>) {
     core.reorder_projects(&ids);
 }
 
+/// `erase`: its history goes too; by default it is kept (`closed_projects`).
 #[tauri::command]
-pub async fn remove_project(core: CoreState<'_>, id: String) -> Res<()> {
-    core.remove_project(&id).await.map_err(err)
+pub async fn remove_project(core: CoreState<'_>, id: String, erase: Option<bool>) -> Res<()> {
+    core.remove_project(&id, erase.unwrap_or(false))
+        .await
+        .map_err(err)
+}
+
+/// The projects closed with their history kept, the latest closed first.
+#[tauri::command(async)]
+pub fn closed_projects(core: CoreState) -> Vec<ClosedProjectInfo> {
+    core.closed_projects()
+}
+
+/// « Effacer l'historique » of a closed project (the file of an unreadable one alone), away from
+/// the async workers: it reads the history and removes its logs.
+#[tauri::command]
+pub async fn erase_closed_project(core: CoreState<'_>, id: String) -> Res<()> {
+    let core = core.inner().clone();
+    tokio::task::spawn_blocking(move || core.erase_closed_project(&id))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -434,6 +508,40 @@ pub async fn clipboard_image(app: tauri::AppHandle) -> Res<tauri::ipc::Response>
 #[tauri::command]
 pub async fn interrupt(core: CoreState<'_>, id: String) -> Res<()> {
     core.interrupt(&id).await.map_err(err)
+}
+
+/// A message to a subagent of the agent `id`, by the agent (`call`: the call that launched it).
+#[tauri::command]
+pub async fn message_subagent(
+    core: CoreState<'_>,
+    id: String,
+    call: String,
+    text: String,
+) -> Res<()> {
+    core.message_subagent(&id, &call, &text).await.map_err(err)
+}
+
+/// « Arrêter » on a subagent of the agent `id`, `call` the call that launched it.
+#[tauri::command]
+pub async fn stop_subagent(core: CoreState<'_>, id: String, call: String) -> Res<()> {
+    core.stop_subagent(&id, &call).await.map_err(err)
+}
+
+/// The conversation of a subagent of the agent `id` in the Claude Code view (`call` launched it),
+/// read from its transcript: a file read, off the async workers. `cursor` is the one the read
+/// before gave: null back when its files did not change since.
+#[tauri::command]
+pub async fn subagent_transcript(
+    core: CoreState<'_>,
+    id: String,
+    call: String,
+    cursor: Option<crate::agent::sidechain::Cursor>,
+) -> Res<Option<crate::agent::sidechain::SidechainRead>> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.subagent_transcript(&id, &call, cursor))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(err)
 }
 
 #[tauri::command(async)]
@@ -1140,19 +1248,39 @@ fn spawn_launch(
     Ok(launch.info)
 }
 
+/// Synchronous on purpose: Tauri handles these on the window's main thread, in the order the
+/// requests arrive, which keeps the bytes of a terminal in the order they were typed. It costs
+/// nothing there: `write` only queues the bytes for the terminal's input thread. Returns the
+/// write's number in the terminal's log of writes, which the window sends back with the report of
+/// a slow echo (`term_report`).
 #[tauri::command]
-pub fn term_write(core: CoreState, id: String, data: String) -> Res<()> {
+pub fn term_write(core: CoreState, id: String, data: String) -> Res<u64> {
     core.pty.write(&id, data.as_bytes()).map_err(err)
 }
 
+/// Synchronous, so that resizes keep their order among themselves (the last one wins); it waits
+/// on nothing heavy. It is not in order with the writes queued before it: the terminal's input
+/// thread writes those whenever the program reads.
 #[tauri::command]
 pub fn term_resize(core: CoreState, id: String, cols: u16, rows: u16) -> Res<()> {
     core.pty.resize(&id, cols, rows).map_err(err)
 }
 
+/// Off the main thread, and off the async runtime's workers: ending a process tree (listing the
+/// machine's processes, its windows…) and closing the pseudo-console take their time.
 #[tauri::command]
-pub fn term_kill(core: CoreState, id: String) {
-    core.pty.kill(&id);
+pub async fn term_kill(core: CoreState<'_>, id: String) -> Res<()> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.kill_terminal(&id))
+        .await
+        .map_err(|e| err(e.into()))
+}
+
+/// What the window measured of a terminal (the renderer it draws with, an echo that was slow to
+/// show), for the log.
+#[tauri::command(async)]
+pub fn term_report(core: CoreState, id: String, report: TermReport) {
+    core.pty.report(&id, report);
 }
 
 #[tauri::command]
@@ -1173,13 +1301,16 @@ pub fn set_unsaved(core: CoreState, count: usize) {
         .store(count, std::sync::atomic::Ordering::Release);
 }
 
+/// Turns Remote Control on or off for the agent. True when, in the Claude Code view, the change
+/// waits for the interface's next start: it runs, and was started with the other state.
 #[tauri::command]
-pub async fn set_remote_control(core: CoreState<'_>, id: String, enabled: bool) -> Res<()> {
-    core.set_remote_control(&id, enabled).await.map_err(err)?;
+pub async fn set_remote_control(core: CoreState<'_>, id: String, enabled: bool) -> Res<bool> {
+    let at_next_start = core.set_remote_control(&id, enabled).await.map_err(err)?;
     if enabled {
-        core.telemetry.track(Event::RemoteControlEnabled);
+        core.telemetry
+            .track(Event::RemoteControlEnabled { from: "agent" });
     }
-    Ok(())
+    Ok(at_next_start)
 }
 
 // ---------- board ----------
@@ -1194,9 +1325,27 @@ pub async fn ticket_create(
     counted(&core, Event::TicketCreated, r)
 }
 
-#[tauri::command(async)]
-pub fn ticket_update(core: CoreState, id: String, draft: TicketDraft) -> Res<Ticket> {
-    core.ticket_update(&id, draft).map_err(err)
+/// Its pasted images are written: off the async workers.
+#[tauri::command]
+pub async fn ticket_update(core: CoreState<'_>, id: String, draft: TicketDraft) -> Res<Ticket> {
+    let core = core.inner().clone();
+    tokio::task::spawn_blocking(move || core.ticket_update(&id, draft))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(err)
+}
+
+/// The images of a ticket, with their content, for its form to show: read off the async workers.
+#[tauri::command]
+pub async fn ticket_images(
+    core: CoreState<'_>,
+    id: String,
+) -> Res<Vec<crate::ticketimages::ImageData>> {
+    let core = core.inner().clone();
+    tokio::task::spawn_blocking(move || core.ticket_images(&id))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -1368,24 +1517,31 @@ pub async fn suggest_run_commands(
     core.suggest_run_commands(&project_id).await.map_err(err)
 }
 
-/// Looks for a newer release, through the network settings as they are now.
+/// Looks for a newer release, through the network settings as they are now. `manual`: the user
+/// asked, a failure is shown whatever the checks before it did; else it is kept quiet until it goes
+/// on. A failure is an answer (`failed`, with its cause), not an error of the command.
 #[tauri::command]
 pub async fn update_check(
     app: tauri::AppHandle,
     core: CoreState<'_>,
     updates: State<'_, crate::updates::Updates>,
-) -> Res<Option<crate::updates::Found>> {
+    manual: bool,
+) -> Res<crate::updates::Checked> {
     let settings = core.settings.read().clone();
-    crate::updates::check(&app, &settings, &updates)
-        .await
-        .map_err(err)
+    Ok(crate::updates::check(&app, &settings, &updates, manual).await)
 }
 
-/// Downloads the update found as `id`, its signature checked, and keeps it until it installs:
-/// true when it is the one ready now.
+/// Downloads the update found as `id`, its signature checked, and keeps it until it installs. A
+/// download that fails reads latest.json again and is tried once more before it is told (`failed`,
+/// with its cause and the release's page, for the browser), under the rule of `update_check`
+/// for `manual`.
 #[tauri::command]
-pub async fn update_download(updates: State<'_, crate::updates::Updates>, id: u32) -> Res<bool> {
-    updates.download(id).await.map_err(err)
+pub async fn update_download(
+    updates: State<'_, crate::updates::Updates>,
+    id: u32,
+    manual: bool,
+) -> Res<crate::updates::Downloaded> {
+    Ok(updates.downloaded(id, manual).await)
 }
 
 /// « Redémarrer maintenant »: the update downloaded installs, the app stopped cleanly first, and
@@ -1571,6 +1727,64 @@ mod tests {
         use crate::i18n::Lang::{En, Fr};
         assert_eq!(shell_not_found(En, "zsh"), "shell “zsh” not found");
         assert_eq!(shell_not_found(Fr, "zsh"), "shell « zsh » introuvable");
+    }
+
+    #[tokio::test]
+    async fn adding_a_folder_is_counted_as_a_project_created_unless_a_history_came_back() {
+        let h = crate::core_tests::harness("commands-project-counted");
+        h.core.set_telemetry(true).unwrap();
+        let created = || {
+            h.core
+                .telemetry
+                .pending()
+                .iter()
+                .filter(|e| e["eventName"] == "project_created")
+                .count()
+        };
+        let (p, r) = h.project(false).await;
+        assert_eq!(created(), 0, "the core itself counts nothing");
+
+        // A new project is counted; so is the next one.
+        assert!(project_added(&h.core, Ok((p.clone(), false))).is_ok());
+        assert_eq!(created(), 1);
+        assert!(project_added(&h.core, Ok((p.clone(), false))).is_ok());
+        assert_eq!(created(), 2);
+        // One that was refused is not, and neither is a history that came back.
+        assert!(project_added(&h.core, Err("non".into())).is_err());
+        assert!(project_added(&h.core, Ok((p.clone(), true))).is_ok());
+        assert_eq!(created(), 2);
+
+        // What the core says of a real adding: a blank project, then the same folder closed and
+        // added again.
+        let (_, back) = h
+            .core
+            .add_project(
+                &r.to_string_lossy(),
+                "",
+                "oklch(0.7 0.1 20)",
+                false,
+                None,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!back);
+        h.core.remove_project(&p.id, false).await.unwrap();
+        let (again, back) = h
+            .core
+            .add_project(
+                &r.to_string_lossy(),
+                "",
+                "oklch(0.7 0.1 20)",
+                false,
+                None,
+                true,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(back && again.id == p.id);
     }
 }
 

@@ -11,8 +11,10 @@
   import { modelLabel } from '../lib/models';
   import { contextUse, estimateHint, fSpentUsd, spent } from '../lib/spend';
   import { injectedSource, parseAgentMessage, subagentLabels } from '../lib/events';
+  import { subagentInfo } from '../lib/subagents';
   import { editsByTurn } from '../lib/tools';
-  import { app } from '../lib/state.svelte';
+  import { app, type SubFocus } from '../lib/state.svelte';
+  import { SHELL_GLYPH, terminalIn } from '../lib/term-actions';
   import { canPrepare, canTest, prepareLaunch, testAgent } from '../lib/test-launch.svelte';
   import type { Agent, ConvItem, Project } from '../lib/types';
   import AgentTerminal from './AgentTerminal.svelte';
@@ -122,8 +124,14 @@
   });
   // The editor shows the agent's own checkout: its worktree, else the project's.
   const editorSource = $derived(agent.worktree ? agent.id : 'project');
+  // Its terminal is the first shell found, in its worktree: the button wears that shell's glyph.
+  const termGlyph = $derived(SHELL_GLYPH[app.shells[0]?.id ?? '']?.glyph ?? '$_');
   const openFile = (abs: string, line: number | null) =>
     app.openEditor({ projectId: project.id, source: editorSource, abs, line: line ?? undefined });
+  /** Opens the conversation of the subagent `call` launched, in place of the agent's. */
+  const openSub = (call: string) => app.openSubagent(agent.id, call);
+  /** The subagent that made a request, if the conversation or the plan still knows it. */
+  const subOf = (call: string) => subagentInfo(agent, conv.items, call);
   const duration = $derived(fDur(agent.activeMs + (agent.activeSince ? app.now - agent.activeSince : 0)));
   const running = $derived(agent.status === 'running');
 
@@ -334,7 +342,30 @@
     }
   }
 
+  // Back from a subagent's conversation (left by its breadcrumb or Escape): the focus goes back to where it was opened
+  // from; a button of this conversation is drawn anew, and found again by where it is (`data-open-from`) and what it
+  // opens (`data-open-sub`) — but for the stack of dots of the plan's banner (`dots`), which opens any of the subagents
+  // running (a menu, for several) and is found whichever it stands for by now; else the button of its call, once the
+  // conversation draws it.
+  let focusBack = $state<SubFocus | null>(null);
+  $effect(() => {
+    const from = focusBack;
+    const el = from?.el?.isConnected ? from.el : null;
+    if (!from || (!el && !conv.loaded)) return;
+    focusBack = null;
+    tick().then(() => {
+      const same = from.opener
+        ? [...document.querySelectorAll<HTMLElement>('main.conv [data-open-from]')].find(
+            (e) => e.dataset.openFrom === from.opener && (from.opener === 'dots' || e.dataset.openSub === from.call),
+          )
+        : undefined;
+      const row = [...(scroller?.querySelectorAll<HTMLElement>('[data-item]') ?? [])].find((e) => e.dataset.item === from.call);
+      (el ?? same ?? row?.querySelector<HTMLElement>('.open-sub'))?.focus({ preventScroll: true });
+    });
+  });
+
   onMount(() => {
+    focusBack = app.takeFocusBack(agent.id);
     // The view does not follow the bottom on its way to another place.
     if (conv.jump || (conv.place && !conv.place.stick)) stick = false;
     // Shown, the conversation stays in memory (read again if it had left it).
@@ -467,6 +498,19 @@
   {/if}
 {/snippet}
 
+<!-- Above a request a subagent made: which one, and the way to its conversation, where it is answered too. -->
+{#snippet asks(sub: string | undefined, request: string)}
+  {@const from = sub ? subOf(sub) : null}
+  {#if sub && from}
+    <div class="asks">
+      <span>↳ {t('subagents.asks', { name: from.title })}</span>
+      <button class="open-sub" data-open-sub={sub} data-open-from="asks:{request}" onclick={() => openSub(sub)}
+        >{t('subagents.open')}</button
+      >
+    </div>
+  {/if}
+{/snippet}
+
 <!-- `.conv` is where the keys answering a waiting request apply (answersHere, in shortcuts.ts). -->
 <main class="conv">
   <header class="head">
@@ -486,6 +530,17 @@
     >
       <span class="mono glyph">&lt;/&gt;</span><span class="lbl">{t('common.editor')}</span>
     </button>
+    <!-- A terminal in the agent's worktree: one that works in the project's folder has the terminals of the sidebar. -->
+    {#if agent.worktree && !agent.archived}
+      <button
+        class="btn term"
+        aria-label={t('conv.header.terminal')}
+        use:tip={t('conv.header.terminalHint')}
+        onclick={() => terminalIn(project.id, { agentId: agent.id }, agent.name)}
+      >
+        <span class="mono glyph">{termGlyph}</span><span class="lbl">{t('conv.header.terminal')}</span>
+      </button>
+    {/if}
     {#if agent.recipe || agent.isola}
       {#if canTest(agent)}
         <button
@@ -658,10 +713,12 @@
               {:else if item.kind === 'thinking'}
                 <Thinking {item} />
               {:else if item.kind === 'tool'}
-                <ToolRow {item} cwd={agent.cwd} childrenOf={(id) => children.get(id) ?? []} onOpenFile={openFile} />
+                <ToolRow {item} cwd={agent.cwd} childrenOf={(id) => children.get(id) ?? []} onOpenFile={openFile} onOpenSub={openSub} />
               {:else if item.kind === 'question'}
+                {@render asks(item.sub, item.id)}
                 <QuestionCard {item} agentId={agent.id} pending={agent.pending.includes(item.id)} current={agent.pending[0] === item.id} />
               {:else if item.kind === 'permission'}
+                {@render asks(item.sub, item.id)}
                 <PermissionCard
                   {item}
                   agentId={agent.id}
@@ -772,6 +829,7 @@
     text-overflow: ellipsis;
   }
   .edit,
+  .term,
   .test,
   .view {
     height: 28px;
@@ -784,6 +842,7 @@
     flex: none;
   }
   .edit .glyph,
+  .term .glyph,
   .test .glyph,
   .view .glyph {
     font-size: 11px;
@@ -843,6 +902,7 @@
       display: none;
     }
     .edit .lbl,
+    .term .lbl,
     .test .lbl,
     .view .lbl {
       display: none;
@@ -1070,5 +1130,24 @@
   }
   .next .btn {
     flex-shrink: 0;
+  }
+  .asks {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 6px 34px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .open-sub {
+    border: none;
+    background: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .open-sub:hover {
+    text-decoration: underline;
   }
 </style>

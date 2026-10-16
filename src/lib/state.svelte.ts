@@ -16,6 +16,7 @@ import { readPref, writePref } from './prefs';
 import { testCommand } from './recipe';
 import type { SettingsTab } from './settings.svelte';
 import type { VoiceTarget } from './voice.svelte';
+import type { FormImage } from './ticket-images';
 import { applyTheme } from './theme';
 import type {
   AccountView,
@@ -40,8 +41,24 @@ import type {
   Usage,
 } from './types';
 
+/** Where the focus goes back to when a subagent's conversation is left: the element that had it, and the call opened from. */
+export interface SubFocus {
+  agentId: string;
+  call: string;
+  el: HTMLElement | null;
+  /**
+   * The button it was, when it was one of those that open a subagent in the agent's conversation (the stack of dots of its
+   * banner, the line of its call, a request it made): `data-open-from`, which the conversation drawn anew finds again.
+   */
+  opener: string | null;
+}
+
 export type Modal =
-  | { kind: 'newProject' }
+  /**
+   * The window that adds a project, on `path` when it opens on one (read at once). `historyId`: of the folder's closed
+   * projects, the one « Rouvrir » was clicked on; it holds only while the path typed is `path`.
+   */
+  | { kind: 'newProject'; path?: string; historyId?: string }
   /** The dictation's first use, or its model missing: choose and download it, then listen for `target`. */
   | { kind: 'voiceSetup'; target: VoiceTarget }
   /** The question of the first start: the usage statistics. */
@@ -131,6 +148,10 @@ export interface TicketFormDraft {
   maxLoops: number;
   after: string[];
   branch: string;
+  /** Absent: those of the ticket. */
+  images?: FormImage[];
+  /** The files of the ticket's images as the window showed them, those gone from its folder left out; absent: the ticket's. */
+  held?: string[];
 }
 
 /** What the window of a new branch had written when the question of the stash took its place. */
@@ -227,6 +248,24 @@ class AppState {
   showArchived = $state(false);
   /** The plan banner of an agent's conversation, open or folded, by agent (kept for the session; absent: open if the window is tall enough). */
   planOpen = $state<Record<string, boolean>>({});
+  /**
+   * The subagent whose conversation fills the main area in place of its agent's, by agent: the id of the call that
+   * launched it (ESC-13). Absent or null: the agent's own conversation. Kept for the session.
+   */
+  subView = $state<Record<string, string | null>>({});
+  /**
+   * What was typed to a subagent through its agent (« Lui écrire »), by `${agentId}:${call}`: kept when the view is left
+   * and after the subagent ended, for the message that was not sent.
+   */
+  subDrafts = $state<Record<string, string>>({});
+  /**
+   * Where the focus goes back to when a subagent's conversation is left (not reactive: read once, by the conversation that
+   * comes back). `from`: the element that had the focus when the first conversation was opened from the agent's own;
+   * `back`: that, once the view was closed by its breadcrumb or Escape (selecting an agent drops it: the composer has the focus then).
+   */
+  subFocus: { from: SubFocus | null; back: SubFocus | null } = { from: null, back: null };
+  /** The list of an agent's subagents under its card, unfolded or folded by the reader, by agent (absent: unfolded while one runs). */
+  subsOpen = $state<Record<string, boolean>>({});
   modal = $state<Modal | null>(null);
   toasts = $state<Toast[]>([]);
   now = $state(Date.now());
@@ -720,9 +759,49 @@ class AppState {
     writePref('diffSplit', on ? '1' : '0');
   }
 
+  /**
+   * Opens the conversation of the subagent `call` of the agent `agentId` in place of the agent's (and selects the agent).
+   * Opened from the agent's own conversation, the element that has the focus now is where it goes back to.
+   */
+  openSubagent(agentId: string, call: string) {
+    const nested = !!this.subView[agentId];
+    const active = document.activeElement;
+    const from = nested
+      ? this.subFocus.from
+      : {
+          agentId,
+          call,
+          el: active instanceof HTMLElement && active !== document.body ? active : null,
+          opener: active instanceof HTMLElement ? (active.dataset.openFrom ?? null) : null,
+        };
+    this.selectAgent(agentId);
+    if (this.agents[agentId]) {
+      this.subView[agentId] = call;
+      this.subFocus.from = from;
+    }
+  }
+
+  /** Back to the agent's own conversation, where the focus goes back to (`takeFocusBack`). */
+  closeSubagent(agentId: string) {
+    this.subView[agentId] = null;
+    const { from } = this.subFocus;
+    this.subFocus = { from: null, back: from?.agentId === agentId ? from : null };
+  }
+
+  /** Where the focus goes back to, once, when the conversation of `agentId` is drawn again after `closeSubagent`. */
+  takeFocusBack(agentId: string): SubFocus | null {
+    const { back } = this.subFocus;
+    if (back?.agentId !== agentId) return null;
+    this.subFocus.back = null;
+    return back;
+  }
+
+  /** Selecting an agent shows its own conversation, not one of its subagents'. */
   selectAgent(id: string) {
     const a = this.agents[id];
     if (!a) return;
+    if (this.subView[id]) this.subView[id] = null;
+    this.subFocus = { from: null, back: null };
     if (this.ui.activeProject !== a.projectId) this.ui.activeProject = a.projectId;
     this.ui.view = 'project';
     this.ui.selectedAgent[a.projectId] = id;
@@ -1039,11 +1118,12 @@ class AppState {
     this.closeEditor(next.projectId);
   }
 
-  toast(text: string, kind: Toast['kind'] = 'info', action?: ToastAction) {
+  /** `ms` is for a toast with more to read and do than the usual time allows; without it, the time follows the toast's kind and button. */
+  toast(text: string, kind: Toast['kind'] = 'info', action?: ToastAction, ms?: number) {
     const id = ++this.toastId;
     this.toasts.push(action ? { id, text, kind, action } : { id, text, kind });
     // One with a button stays long enough to reach it.
-    setTimeout(() => this.dismissToast(id), action ? 12_000 : kind === 'error' ? 7000 : 3500);
+    setTimeout(() => this.dismissToast(id), ms ?? (action ? 12_000 : kind === 'error' ? 7000 : 3500));
   }
 
   dismissToast(id: number) {

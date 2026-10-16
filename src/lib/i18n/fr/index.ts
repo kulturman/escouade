@@ -19,6 +19,7 @@ import runs from './runs';
 import settings from './settings';
 import shell from './shell';
 import stats from './stats';
+import subagents from './subagents';
 import voice from './voice';
 
 export const fr = {
@@ -41,6 +42,7 @@ export const fr = {
   mcp,
   branches,
   plan,
+  subagents,
   voice,
 } as const;
 

@@ -20,7 +20,10 @@ const ESCOUADE_TOOLS: Record<string, Key> = {
   list_agents: 'mcp.tools.listAgents',
   list_tickets: 'mcp.tools.listTickets',
   get_ticket: 'mcp.tools.getTicket',
+  get_ticket_image: 'mcp.tools.getTicketImage',
   get_usage: 'mcp.tools.getUsage',
+  get_board: 'mcp.tools.getBoard',
+  set_board: 'mcp.tools.setBoard',
   get_agent_summary: 'mcp.tools.getAgentSummary',
   list_requests: 'mcp.tools.listRequests',
   create_ticket: 'mcp.tools.createTicket',
@@ -34,6 +37,13 @@ const ESCOUADE_TOOLS: Record<string, Key> = {
   answer_question: 'mcp.tools.answerQuestion',
   report_progress: 'mcp.tools.reportProgress',
   split_ticket: 'mcp.tools.splitTicket',
+  approve_ticket: 'mcp.tools.approveTicket',
+  reject_ticket: 'mcp.tools.rejectTicket',
+  resume_ticket: 'mcp.tools.resumeTicket',
+  resolve_conflict: 'mcp.tools.resolveConflict',
+  dismiss_block: 'mcp.tools.dismissBlock',
+  delete_ticket: 'mcp.tools.deleteTicket',
+  wait_ticket: 'mcp.tools.waitTicket',
 };
 
 /**

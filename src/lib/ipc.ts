@@ -8,18 +8,20 @@ import type {
   Attachment,
   BoardSettings,
   BranchInfo,
+  CheckedUpdate,
   ClaudeLocated,
+  ClosedProject,
   CommitScope,
   Container,
   ConvItem,
   ConvSearchResult,
+  DownloadedUpdate,
   ExternalIssue,
   FileBase,
   FileChange,
   FileText,
   FileTree,
   FolderInfo,
-  FoundRelease,
   GitLog,
   InitialState,
   Integration,
@@ -40,10 +42,13 @@ import type {
   SlashCommand,
   StatesView,
   StatsView,
+  SubagentRead,
   TermInfo,
   TestRecipe,
   Ticket,
   TicketDraft,
+  TicketImageData,
+  TranscriptCursor,
   UiEvent,
   UiState,
   VoiceEvent,
@@ -51,6 +56,30 @@ import type {
   VoiceProgress,
   WorktreeSuggestion,
 } from './types';
+
+/**
+ * What a terminal tells the app's log (see pty.rs): which renderer draws it, or that an echo was slow. Durations only, in
+ * ms (fractional) from `performance.now()`: the window's clock is never compared with the backend's.
+ */
+export type TermReport =
+  /** `detail`: the GPU's name for WebGL (a software one, SwiftShader, would say so), or why WebGL is not used. */
+  | { kind: 'renderer'; renderer: 'webgl' | 'dom'; detail?: string }
+  /**
+   * The write numbered `seq` by `term_write` (`bytes` of UTF-8) took `sentToReceived` from leaving the window to the output
+   * that answers it, and `receivedToPainted` from that output to its paint. `sentToAcked`: from the call of `term_write` to
+   * the resolution of its promise (the way to the backend and back). `outputEnd`: the bytes of output the terminal had
+   * received, the echo's chunk included, when that chunk came in: every read of the backend is one message of the same
+   * bytes, in order, so this tells which read was the echo.
+   */
+  | {
+      kind: 'slowEcho';
+      seq: number;
+      bytes: number;
+      sentToReceived: number;
+      receivedToPainted: number;
+      sentToAcked?: number;
+      outputEnd?: number;
+    };
 
 export const api = {
   subscribe: (onEvent: (e: UiEvent) => void) => {
@@ -94,12 +123,29 @@ export const api = {
     output.onmessage = onData;
     return invoke<TermInfo>('account_login', { id, cols, rows, output });
   },
-  inspectFolder: (path: string) => invoke<FolderInfo>('inspect_folder', { path }),
-  createProject: (a: { path: string; name: string; color: string; worktreePerAgent: boolean; firstAgent: string | null }) =>
-    invoke<Project>('create_project', a),
+  /** `historyId`: the history of the folder to say (a closed project's, from « Rouvrir »), else its latest closed project's. */
+  inspectFolder: (path: string, historyId?: string) => invoke<FolderInfo>('inspect_folder', historyId ? { path, historyId } : { path }),
+  /**
+   * `restore`: the folder of a closed project gets its history (same id, agents, tickets) back; else a project of its
+   * own. `historyId`: which of the folder's histories comes back (the latest closed by default).
+   */
+  createProject: (a: {
+    path: string;
+    name: string;
+    color: string;
+    worktreePerAgent: boolean;
+    firstAgent: string | null;
+    restore: boolean;
+    historyId?: string;
+  }) => invoke<Project>('create_project', a),
   updateProject: (project: Project) => invoke<void>('update_project', { project }),
   reorderProjects: (ids: string[]) => invoke<void>('reorder_projects', { ids }),
-  removeProject: (id: string) => invoke<void>('remove_project', { id }),
+  /** `erase`: its history goes too (conversations, tickets, settings); else it is kept as a closed project. */
+  removeProject: (id: string, erase: boolean) => invoke<void>('remove_project', { id, erase }),
+  /** The projects closed with their history kept, the latest closed first. */
+  closedProjects: () => invoke<ClosedProject[]>('closed_projects'),
+  /** The history of a closed project, erased for good (an entry the app cannot read: its one file). */
+  eraseClosedProject: (id: string) => invoke<void>('erase_closed_project', { id }),
   createAgent: (projectId: string, model: string | null = null) => invoke<Agent>('create_agent', { projectId, model }),
   createAgentOnBranch: (projectId: string, branch: string, model: string | null = null) =>
     invoke<Agent>('create_agent_on_branch', { projectId, branch, model }),
@@ -114,6 +160,13 @@ export const api = {
   /** The image on the system's clipboard as PNG, empty without one: read for WebKitGTK (Linux), which leaves it out of a paste. */
   clipboardImage: () => invoke<ArrayBuffer>('clipboard_image'),
   interrupt: (id: string) => invoke<void>('interrupt', { id }),
+  /** « Arrêter » on a subagent of the agent `id` (`call`: the call that launched it), by Claude Code's `stop_task`. */
+  stopSubagent: (id: string, call: string) => invoke<void>('stop_subagent', { id, call }),
+  /** The conversation of a subagent in the Claude Code view, read from the transcript Claude Code keeps of it (read-only; no items while there is none). `cursor` is the one the read before gave: null back when its files did not change since. */
+  subagentTranscript: (id: string, call: string, cursor: TranscriptCursor | null = null) =>
+    invoke<SubagentRead | null>('subagent_transcript', { id, call, cursor }),
+  /** A message to a subagent of the agent `id`: the agent is asked to pass it on (Claude Code lets no host write to a subagent). */
+  messageSubagent: (id: string, call: string, text: string) => invoke<void>('message_subagent', { id, call, text }),
   answerQuestion: (id: string, requestId: string, answers: Record<string, string>) =>
     invoke<void>('answer_question', { id, requestId, answers }),
   answerPermission: (id: string, requestId: string, decision: 'allow' | 'always' | 'deny', message: string | null = null) =>
@@ -131,10 +184,14 @@ export const api = {
   duplicateAgent: (id: string) => invoke<Agent>('duplicate_agent', { id }),
   archiveAgent: (id: string, archived: boolean) => invoke<void>('archive_agent', { id, archived }),
   setAgentView: (id: string, terminal: boolean) => invoke<void>('set_agent_view', { id, terminal }),
-  agentTerminal: (id: string, cols: number, rows: number, onData: (d: ArrayBuffer) => void) => {
+  /**
+   * Starts the agent's Claude Code interface. `manual`: the user asked for it (« Relancer »); the backend refuses one that is
+   * not, after two stops in a row as soon as it started.
+   */
+  agentTerminal: (id: string, cols: number, rows: number, onData: (d: ArrayBuffer) => void, manual = false) => {
     const output = new Channel<ArrayBuffer>();
     output.onmessage = onData;
-    return invoke<TermInfo>('agent_terminal', { id, cols, rows, output });
+    return invoke<TermInfo>('agent_terminal', { id, cols, rows, output, manual });
   },
   /** An image pasted in the agent's Claude Code view (base64), written to a file: the path to type there, as its `claude` reads it. */
   pasteImage: (id: string, mediaType: string, data: string) => invoke<string>('paste_image', { id, mediaType, data }),
@@ -177,7 +234,11 @@ export const api = {
   branchesMerged: (projectId: string) => invoke<string[]>('branches_merged', { projectId }),
   /** The diff from `a` to `b` (`git diff a b`), two branches or commits. */
   gitDiffRefs: (projectId: string, a: string, b: string) => invoke<string>('git_diff_refs', { projectId, a, b }),
-  setRemoteControl: (id: string, enabled: boolean) => invoke<void>('set_remote_control', { id, enabled }),
+  /**
+   * Turns an agent's remote control on or off by hand (off sets it apart from the settings that cover it). Resolves with
+   * whether the change waits for the next launch of the Claude Code interface that is open: Escouade can't change it there.
+   */
+  setRemoteControl: (id: string, enabled: boolean) => invoke<boolean>('set_remote_control', { id, enabled }),
   /** The statistics of a period: of every account (null) or of one. */
   stats: (range: string, account: string | null = null) => invoke<StatsView>('stats', { range, account }),
   refreshUsage: () => invoke<void>('refresh_usage'),
@@ -222,6 +283,8 @@ export const api = {
   ticketCreate: (projectId: string, draft: TicketDraft) => invoke<Ticket>('ticket_create', { projectId, draft }),
   ticketUpdate: (id: string, draft: TicketDraft) => invoke<Ticket>('ticket_update', { id, draft }),
   ticketDelete: (id: string) => invoke<void>('ticket_delete', { id }),
+  /** The images of a ticket with their content, for its form; those whose file is gone are left out. */
+  ticketImages: (id: string) => invoke<TicketImageData[]>('ticket_images', { id }),
   ticketPrioritize: (id: string) => invoke<void>('ticket_prioritize', { id }),
   /** "Lancer": starts even with the autopilot off. */
   ticketStart: (id: string) => invoke<void>('ticket_start', { id }),
@@ -289,10 +352,16 @@ export const api = {
   suggestWorktreeSteps: (projectId: string) => invoke<WorktreeSuggestion>('suggest_worktree_steps', { projectId }),
   /** The launch commands Claude suggests for the project, from what it reads of it, with how many it gave that were refused; nothing is saved. */
   suggestRunCommands: (projectId: string) => invoke<RunSuggestion>('suggest_run_commands', { projectId }),
-  /** A newer release, through the network settings (proxy, TLS verification), kept by the backend for its download. */
-  updateCheck: () => invoke<FoundRelease | null>('update_check'),
-  /** Downloads the release found, its signature checked, kept by the backend until it installs: true once it is the one ready. */
-  updateDownload: (id: number) => invoke<boolean>('update_download', { id }),
+  /**
+   * A newer release, through the network settings (proxy, TLS verification), kept by the backend for its download.
+   * `manual`: the user asked, so a failure is always to be shown.
+   */
+  updateCheck: (manual: boolean) => invoke<CheckedUpdate>('update_check', { manual }),
+  /**
+   * Downloads the release found, its signature checked, kept by the backend until it installs: ready once it is the
+   * one, superseded when a newer one took its place meanwhile.
+   */
+  updateDownload: (id: number, manual: boolean) => invoke<DownloadedUpdate>('update_download', { id, manual }),
   updateClose: (id: number) => invoke<void>('update_close', { id }),
   /** « Redémarrer maintenant »: the update downloaded installs, the app stopped cleanly first, and the app starts again. */
   updateRestart: () => invoke<void>('update_restart'),
@@ -302,7 +371,9 @@ export const api = {
   updatePresence: (presence: { modal: boolean; testing: boolean; activeAt: number }) => invoke<void>('update_presence', { presence }),
   /** One HTTP request without proxy (2 s): true for any answer. */
   httpReady: (url: string) => invoke<boolean>('http_ready', { url }),
-  termWrite: (id: string, data: string) => invoke<void>('term_write', { id, data }),
+  /** The write's number, which the backend's log tells it by. */
+  termWrite: (id: string, data: string) => invoke<number>('term_write', { id, data }),
+  termReport: (id: string, report: TermReport) => invoke<void>('term_report', { id, report }),
   termResize: (id: string, cols: number, rows: number) => invoke<void>('term_resize', { id, cols, rows }),
   termKill: (id: string) => invoke<void>('term_kill', { id }),
   playChime: () => invoke<void>('play_chime'),

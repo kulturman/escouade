@@ -30,6 +30,13 @@ export default defineZone('shell', {
     worktreeDesc: 'Keeps each agent’s work apart and shows its changed files separately',
     create: 'Create project',
     creating: 'Creating…',
+    history: {
+      found: 'History found: {agents}, {tickets}, last activity on {date}',
+      fresh: 'Start from a blank project',
+      freshDesc: 'The history stays in Settings › Projects, where you can erase it.',
+      reopen: 'Reopen project',
+      reopening: 'Reopening…',
+    },
     /** What is known of the folder chosen. */
     git: {
       choose: 'Choose the project folder',
@@ -61,9 +68,11 @@ export default defineZone('shell', {
     notReady: 'The update to {version} isn’t ready anymore: Escouade will offer it again once it’s downloaded.',
     installed: 'Escouade {version} is installed.',
     seeNotes: 'See what’s new',
-    /** `{error}`: what the updater answered, as received. */
+    /** `{error}`: the cause the backend gives, already in the language of the interface (or what the call answered, as received). */
     downloadFailed: 'Couldn’t download the update: {error}',
     checkFailed: 'Couldn’t check for updates: {error}',
+    /** The button of a failed download: the page of the release, where the installer can be taken from. */
+    openInBrowser: 'Download in the browser',
   },
   /** The question of the first start: the usage statistics (`telemetry`). */
   telemetry: {

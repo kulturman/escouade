@@ -49,7 +49,8 @@
     checking = true;
     const found = await checkForUpdate(true);
     checking = false;
-    if (!found) app.toast(t('settings.about.noUpdate'), 'info');
+    // A check that failed has told why: it is not "nothing new".
+    if (found === false) app.toast(t('settings.about.noUpdate'), 'info');
   }
 </script>
 
@@ -115,6 +116,12 @@
         aria-label={t('settings.claude.idleStopLabel')}
         bind:value={s.idleStopMinutes}
       />
+    </Row>
+  </Group>
+  <!-- Beside « Claude et les agents peuvent piloter Escouade », before its activity log, which can be long. -->
+  <Group title={t('settings.claude.remoteTitle')}>
+    <Row label={t('settings.claude.remoteAll')} desc={t('settings.claude.remoteAllDesc')}>
+      <Switch label={t('settings.claude.remoteAll')} bind:on={s.remoteControlAll} />
     </Row>
   </Group>
   <McpSection />

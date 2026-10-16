@@ -16,7 +16,7 @@ use crate::model::*;
 use serde_json::{json, Value};
 
 /// A new agent of `p` named `name` (never renamed), its process up: it asks nothing.
-async fn live(h: &Harness, p: &Project, name: &str) -> AgentMeta {
+pub(super) async fn live(h: &Harness, p: &Project, name: &str) -> AgentMeta {
     let meta = h
         .core
         .create_agent_with(
@@ -59,7 +59,7 @@ async fn asking(h: &Harness, p: &Project, name: &str, what: &str) -> AgentMeta {
 
 /// Claude Code asks the agent `id` for `rid`, as `request` (its `can_use_tool`) says. The fake
 /// `claude` of a live agent ignores the answer: nothing else happens to the agent.
-fn asks(h: &Harness, id: &str, rid: &str, mut request: Value) {
+pub(super) fn asks(h: &Harness, id: &str, rid: &str, mut request: Value) {
     request["subtype"] = json!("can_use_tool");
     h.core.agent(id).unwrap().lock().handle_frame(
         &json!({ "type": "control_request", "request_id": rid, "request": request }),
@@ -68,7 +68,7 @@ fn asks(h: &Harness, id: &str, rid: &str, mut request: Value) {
 }
 
 /// A permission for the Bash tool.
-fn bash(command: &str) -> Value {
+pub(super) fn bash(command: &str) -> Value {
     json!({ "tool_name": "Bash", "tool_use_id": "tu", "input": { "command": command } })
 }
 
@@ -1102,7 +1102,8 @@ async fn an_answer_is_refused_for_always_oneself_another_project_a_wrong_kind_or
     );
     assert_eq!(last_entry(&h).3, "refused");
     nothing_changed(&h);
-    // A decision that is none: the error lists the two choices, never « always ».
+    // A decision that is none: the router’s refusal, which does not repeat what was given and sends
+    // back to the schema, where the two choices are listed, never « always ».
     let bad = refused(
         &c,
         "answer_permission",
@@ -1110,7 +1111,7 @@ async fn an_answer_is_refused_for_always_oneself_another_project_a_wrong_kind_or
     )
     .await;
     assert!(
-        bad.contains("allow") && bad.contains("deny") && !bad.contains("always"),
+        bad.contains("schéma") && !bad.contains("peut-être") && !bad.contains("always"),
         "{bad}"
     );
     nothing_changed(&h);

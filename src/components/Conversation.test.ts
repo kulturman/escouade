@@ -6,6 +6,9 @@ import userEvent from '@testing-library/user-event';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** The interfaces of Claude Code started (« Vue Claude Code »). */
+const tui = vi.hoisted(() => ({ opened: 0 }));
+
 // "▶ Tester" starts test launches, which have logs (xterm.js): none in jsdom.
 vi.mock('../lib/terminals', () => ({
   launchLog: () => ({
@@ -14,10 +17,16 @@ vi.mock('../lib/terminals', () => ({
   }),
   disposeLog() {},
   // « Vue Claude Code »: its interface, not drawn in jsdom.
-  openAgentTerminal: async () => ({ id: 't1', projectId: '', name: 'x', shell: 'claude' }),
+  openAgentTerminal: async () => {
+    tui.opened += 1;
+    return { id: 't1', projectId: '', name: 'x', shell: 'claude' };
+  },
   getXTerm: () => undefined,
+  roomOf: () => null,
   mountTerminal() {},
   disposeTerminal() {},
+  // The terminal of the header, in the agent’s worktree: only what is asked of the backend is looked at.
+  openTerminal: vi.fn((projectId: string, shell: string, name: string) => Promise.resolve({ id: `t-${name}`, projectId, name, shell })),
 }));
 
 import { applyConvOps, conversationOf, releaseIdle } from '../lib/conversations.svelte';
@@ -27,7 +36,9 @@ import { voice } from '../lib/voice.svelte';
 import type { Agent } from '../lib/types';
 import { answerClock, settle } from '../test/conversation';
 import { agent, fakeBackend, project, resetApp, ticket } from '../test/ipc';
+import { openTerminal } from '../lib/terminals';
 import Conversation from './Conversation.svelte';
+import ContextMenu from './ContextMenu.svelte';
 
 // jsdom has no layout: give scrollable elements a fixed geometry.
 const geometry = { scrollHeight: 2000, clientHeight: 500 };
@@ -1307,6 +1318,85 @@ describe('Conversation editor entry', () => {
   });
 });
 
+describe('Conversation terminal entry (ESC-18)', () => {
+  const PWSH = { id: 'pwsh', label: 'PowerShell 7', path: 'pwsh.exe' };
+  /** An agent of this name, with the shells the app found, in a conversation drawn. */
+  function open(over: Partial<Agent> = {}, shells = [PWSH]) {
+    const a = agent({ id: 'tw1', name: 'refacto-auth', ...over });
+    resetApp({ projects: [project()], agents: [a] });
+    app.shells = shells;
+    fakeBackend({ get_conversation: () => [] });
+    return { a, ...render(Conversation, { agent: a, project: project() }) };
+  }
+  beforeEach(() => vi.mocked(openTerminal).mockClear());
+
+  it('opens a terminal in the worktree of the agent from its header, named after it', async () => {
+    open({ worktree: WT });
+    await userEvent.click(screen.getByRole('button', { name: 'Terminal' }));
+    expect(openTerminal).toHaveBeenCalledWith('p1', 'pwsh', 'pwsh · refacto-auth', { agentId: 'tw1' });
+    await waitFor(() => expect(app.term?.name).toBe('pwsh · refacto-auth'));
+  });
+
+  it('sits right after the editor button, with the glyph of the first shell, its text and its tooltip', () => {
+    open({ worktree: WT });
+    const button = screen.getByRole('button', { name: 'Terminal' });
+    expect(screen.getByRole('button', { name: 'Éditeur' }).nextElementSibling).toBe(button);
+    expect(button).toHaveClass('btn', 'term');
+    expect(button.querySelector('.glyph')).toHaveTextContent('PS');
+    expect(button.querySelector('.glyph')).toHaveClass('mono');
+    // Its text is what a narrow header hides: it is named without it.
+    expect(button.querySelector('.lbl')).toHaveTextContent('Terminal');
+    expect(button).toHaveAttribute('data-tip', 'Ouvrir un terminal dans le worktree de l’agent');
+  });
+
+  it('takes the glyph of the first shell the app found, « $_ » when it found none', () => {
+    const first = open({ worktree: WT }, [
+      { id: 'wsl', label: 'WSL', path: 'wsl.exe' },
+      { id: 'bash', label: 'Git Bash', path: 'bash.exe' },
+    ]);
+    expect(screen.getByRole('button', { name: 'Terminal' }).querySelector('.glyph')).toHaveTextContent('λ');
+    first.unmount();
+    open({ worktree: WT }, []);
+    expect(screen.getByRole('button', { name: 'Terminal' }).querySelector('.glyph')).toHaveTextContent('$_');
+  });
+
+  it('says so when the app found no shell, and opens nothing', async () => {
+    open({ worktree: WT }, []);
+    await userEvent.click(screen.getByRole('button', { name: 'Terminal' }));
+    expect(openTerminal).not.toHaveBeenCalled();
+    expect(app.toasts.at(-1)).toMatchObject({ kind: 'error' });
+  });
+
+  it('is not offered to an agent without a worktree', () => {
+    open();
+    expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+    // The editor button is still there.
+    expect(screen.getByRole('button', { name: 'Éditeur' })).toBeInTheDocument();
+  });
+
+  it('is not offered to an archived agent, whose worktree is gone', () => {
+    open({ worktree: WT, archived: true });
+    expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+  });
+
+  it('follows the agent: offered once its worktree is there, taken back when it is archived', async () => {
+    const { a, rerender } = open();
+    expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+    await rerender({ agent: { ...a, worktree: WT }, project: project() });
+    expect(screen.getByRole('button', { name: 'Terminal' })).toBeInTheDocument();
+    await rerender({ agent: { ...a, worktree: WT, archived: true }, project: project() });
+    expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+  });
+
+  it('is written in English', () => {
+    setLang('en');
+    open({ worktree: WT });
+    const button = screen.getByRole('button', { name: 'Terminal' });
+    expect(button.querySelector('.lbl')).toHaveTextContent('Terminal');
+    expect(button).toHaveAttribute('data-tip', 'Open a terminal in the agent’s worktree');
+  });
+});
+
 describe('Conversation answers from the keyboard', () => {
   const perm = (id: string) => ({
     kind: 'permission',
@@ -1768,6 +1858,29 @@ describe('« Outils d’Escouade au prochain démarrage » (ESC-91)', () => {
     expect(app.relaunched[a.id]).toBe(1);
   });
 
+  // ESC-106: the app replaces the agent by a new object with each update of it, the end of its interface among them.
+  it('in the Claude Code view, starts no other interface when the agent is replaced after its interface stopped', async () => {
+    setLang('fr');
+    const a = agent({ id: 'tui1', status: 'done', terminal: true, terminalId: null });
+    resetApp({ projects: [project()], agents: [a] });
+    fakeBackend({ get_conversation: () => [] });
+    tui.opened = 0;
+    const r = render(Conversation, { agent: a, project: project() });
+    await waitFor(() => expect(tui.opened).toBe(1));
+    // The terminal stopped (as it does, the session not found), then the agent that says so, replaced by a new object.
+    app.exitedTerms['t1'] = 1;
+    for (let i = 0; i < 5; i++) {
+      await r.rerender({
+        agent: { ...a, terminalId: null, tokens: i, tuiExit: { code: 1, quick: true, sessionLost: false } },
+        project: project(),
+      });
+      await new Promise((done) => setTimeout(done, 10));
+    }
+    expect(tui.opened).toBe(1);
+    expect(await screen.findByText(/Claude Code s’est arrêté dès son lancement \(code 1\)/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Relancer' })).toBeInTheDocument();
+  });
+
   it('is written in English when the interface is', () => {
     setLang('en');
     const a = agent({ id: 'en4', status: 'done', escouadeNext: true });
@@ -1780,5 +1893,188 @@ describe('« Outils d’Escouade au prochain démarrage » (ESC-91)', () => {
     );
     expect(within(region).getByRole('button', { name: 'Restart' })).toBeEnabled();
     setLang('fr');
+  });
+});
+
+describe('Conversation and the subagents of its agent', () => {
+  const launch = {
+    kind: 'tool',
+    id: 'c1',
+    name: 'Agent',
+    input: { description: 'Chercher la cause', prompt: 'Cherche.' },
+    status: 'ok',
+    result: { text: 'Async agent launched successfully.\nagentId: t1', isError: false },
+    ts: 1,
+  };
+  const asked = {
+    kind: 'permission',
+    id: 'r1',
+    toolUseId: 'k1',
+    toolName: 'Bash',
+    input: { command: 'curl localhost:3000' },
+    canAlways: false,
+    defaultNo: false,
+    decision: null,
+    ts: 2,
+    sub: 'c1',
+  };
+
+  it('opens a subagent’s conversation from the line of its call', async () => {
+    const { a } = setup({}, [launch]);
+    await userEvent.click(await screen.findByRole('button', { name: 'Ouvrir la conversation du sous-agent Chercher la cause' }));
+    expect(app.subView[a.id]).toBe('c1');
+  });
+
+  it('says which subagent made a request, which is answered here too, and opens it', async () => {
+    const { a } = setup({ status: 'waiting', pending: ['r1'] }, [launch, asked]);
+    expect(await screen.findByText('↳ Demande du sous-agent « Chercher la cause »')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Autoriser/ })).toBeInTheDocument();
+    const opens = screen.getAllByRole('button', { name: 'Ouvrir sa conversation' });
+    await userEvent.click(opens.at(-1)!);
+    expect(app.subView[a.id]).toBe('c1');
+  });
+
+  it('says nothing of a request whose subagent nothing knows, and offers no way to it', async () => {
+    setup({ status: 'waiting', pending: ['r1'] }, [{ ...asked, sub: 'gone' }]);
+    // Still answered here.
+    expect(await screen.findByRole('button', { name: /Autoriser/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Demande du sous-agent/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Ouvrir sa conversation' })).not.toBeInTheDocument();
+  });
+
+  describe('back from a subagent’s conversation', () => {
+    /** The agent, its conversation (the call of a subagent) and an element that has the focus, as a subagent's view is opened then left. */
+    function leave(opener: HTMLElement | null) {
+      const a = agent({ id: `fb${Math.random()}`, status: 'done' });
+      resetApp({ projects: [project()], agents: [a] });
+      fakeBackend({ get_conversation: () => [launch] });
+      if (opener) {
+        document.body.append(opener);
+        opener.focus();
+      }
+      app.openSubagent(a.id, 'c1');
+      return a;
+    }
+    afterEach(() => document.querySelectorAll('.opener').forEach((e) => e.remove()));
+    const button = () => Object.assign(document.createElement('button'), { className: 'opener' });
+
+    it('puts the focus back where the view was opened from', async () => {
+      const opener = button();
+      const a = leave(opener);
+      expect(app.subFocus.from?.el).toBe(opener);
+      app.closeSubagent(a.id);
+      render(Conversation, { agent: a, project: project() });
+      await waitFor(() => expect(opener).toHaveFocus());
+      // Once: it is not taken again by the next conversation drawn.
+      expect(app.takeFocusBack(a.id)).toBeNull();
+    });
+
+    it('remembers the first opener when a subagent opens another', async () => {
+      const opener = button();
+      const a = leave(opener);
+      const inside = button();
+      document.body.append(inside);
+      inside.focus();
+      app.openSubagent(a.id, 'c2');
+      expect(app.subView[a.id]).toBe('c2');
+      app.closeSubagent(a.id);
+      render(Conversation, { agent: a, project: project() });
+      await waitFor(() => expect(opener).toHaveFocus());
+    });
+
+    it('puts it on the button of the call when the element is gone from the document', async () => {
+      const opener = button();
+      const a = leave(opener);
+      opener.remove();
+      app.closeSubagent(a.id);
+      render(Conversation, { agent: a, project: project() });
+      const open = await screen.findByRole('button', { name: 'Ouvrir la conversation du sous-agent Chercher la cause' });
+      await waitFor(() => expect(open).toHaveFocus());
+    });
+
+    describe('to the stack of dots of the plan', () => {
+      const running = (id: string, title: string) => ({ id, title, status: 'running' as const, background: false, tools: 0, startedAt: 1 });
+      const planOf = (...subs: ReturnType<typeof running>[]) => ({
+        source: 'tools' as const,
+        tasks: [{ id: '1', title: 'Chercher', status: 'inProgress' as const }],
+        agents: subs,
+        launched: subs.length,
+        workflows: [],
+      });
+      const ANY = 'Ouvrir la conversation d’un sous-agent';
+      const withPlan = (id: string, ...subs: ReturnType<typeof running>[]) => {
+        const a = agent({ id, status: 'running', plan: planOf(...subs) });
+        resetApp({ projects: [project()], agents: [a] });
+        fakeBackend({ get_conversation: () => [launch] });
+        return a;
+      };
+
+      it('puts the focus back on the stack when the subagent was chosen from its menu', async () => {
+        const a = withPlan('fbmenu', running('c1', 'Chercher la cause'), running('c2', 'Relire'));
+        render(ContextMenu);
+        const first = render(Conversation, { agent: a, project: project() });
+        await userEvent.click(await screen.findByRole('button', { name: ANY }));
+        await userEvent.click(await screen.findByRole('menuitem', { name: /^Relire/ }));
+        await waitFor(() => expect(app.subView[a.id]).toBe('c2'));
+        expect(app.subFocus.from?.opener).toBe('dots');
+        // The view of the subagent takes the place of the conversation, which is drawn anew when it is left.
+        first.unmount();
+        app.closeSubagent(a.id);
+        render(Conversation, { agent: a, project: project() });
+        const stack = await screen.findByRole('button', { name: ANY });
+        await waitFor(() => expect(stack).toHaveFocus());
+      });
+
+      // The line of the call has the same name as the stack of one subagent: the banner is where to look.
+      const inPlan = (name: string) => within(document.querySelector<HTMLElement>('.plan')!).findByRole('button', { name });
+      const ONE = 'Ouvrir la conversation du sous-agent Chercher la cause';
+
+      it('puts it back on the stack of one subagent, which opened at once', async () => {
+        const a = withPlan('fbone', running('c1', 'Chercher la cause'));
+        const first = render(Conversation, { agent: a, project: project() });
+        await userEvent.click(await inPlan(ONE));
+        expect(app.subView[a.id]).toBe('c1');
+        first.unmount();
+        app.closeSubagent(a.id);
+        render(Conversation, { agent: a, project: project() });
+        const stack = await inPlan(ONE);
+        await waitFor(() => expect(stack).toHaveFocus());
+      });
+
+      it('finds the stack again whichever subagents it stands for by then', async () => {
+        const a = withPlan('fbwho', running('c1', 'Chercher la cause'));
+        const first = render(Conversation, { agent: a, project: project() });
+        await userEvent.click(await inPlan(ONE));
+        first.unmount();
+        app.closeSubagent(a.id);
+        // That subagent ended while its view was open: two others run, and the stack stands for them.
+        render(Conversation, { agent: { ...a, plan: planOf(running('c2', 'Relire'), running('c3', 'Tester')) }, project: project() });
+        const stack = await screen.findByRole('button', { name: ANY });
+        await waitFor(() => expect(stack).toHaveFocus());
+      });
+
+      it('falls back to the button of the call when no stack is left', async () => {
+        const a = withPlan('fbnone', running('c1', 'Chercher la cause'));
+        const first = render(Conversation, { agent: a, project: project() });
+        await userEvent.click(await inPlan(ONE));
+        first.unmount();
+        app.closeSubagent(a.id);
+        render(Conversation, { agent: { ...a, plan: undefined }, project: project() });
+        // The only way left to that subagent is the line of its call.
+        const open = await screen.findByRole('button', { name: ONE });
+        await waitFor(() => expect(open).toHaveFocus());
+      });
+    });
+
+    it('moves nothing when the view was left by choosing the agent (the composer has the focus then)', async () => {
+      const opener = button();
+      const a = leave(opener);
+      app.selectAgent(a.id);
+      expect(app.subView[a.id]).toBeNull();
+      render(Conversation, { agent: a, project: project() });
+      await screen.findByRole('button', { name: 'Ouvrir la conversation du sous-agent Chercher la cause' });
+      await tick();
+      expect(opener).not.toHaveFocus();
+    });
   });
 });

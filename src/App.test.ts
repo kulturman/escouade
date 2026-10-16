@@ -397,6 +397,24 @@ describe('App layout', () => {
     await expect.poll(() => screen.queryByRole('region', { name: 'À faire' })).toBeNull();
   });
 
+  it('shows a subagent’s conversation in place of its agent’s, and the agent’s again from its breadcrumb', async () => {
+    const plan = {
+      source: null,
+      tasks: [],
+      agents: [{ id: 'c1', title: 'Chercher', status: 'running', background: true, tools: 0, startedAt: 1, taskId: 't1' }],
+      launched: 1,
+      workflows: [],
+    };
+    start('', { agents: [agent({ plan: plan as never })] });
+    expect(await screen.findByRole('main')).toBeInTheDocument();
+    app.openSubagent('a1', 'c1');
+    const crumbs = await screen.findByRole('navigation', { name: 'Fil d’Ariane' });
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    await userEvent.click(within(crumbs).getByRole('button', { name: 'refacto-auth' }));
+    await expect.poll(() => screen.queryByRole('navigation', { name: 'Fil d’Ariane' })).toBeNull();
+    expect(screen.getByRole('main')).toBeInTheDocument();
+  });
+
   it('opens the board settings from the board header', async () => {
     start('');
     expect(await screen.findByRole('main')).toBeInTheDocument();
@@ -444,6 +462,58 @@ describe('App layout', () => {
     expect(app.projects).toEqual([]);
     await userEvent.click(screen.getByRole('tab', { name: 'Réseau' }));
     expect(screen.getByPlaceholderText('aucun')).toHaveValue('http://proxy:3128');
+  });
+
+  it('erases the history of a closed project from the settings, and comes back to them, their draft kept, the list read again', async () => {
+    const closed = (id: string, name: string) => ({
+      id,
+      name,
+      color: 'oklch(0.72 0.12 300)',
+      path: `C:\code\${name}`,
+      worktreePerAgent: false,
+      agents: 1,
+      tickets: 2,
+      lastActivity: 1,
+      closedAt: 2,
+      size: 2048,
+    });
+    let kept = [closed('c1', 'ancien'), closed('c2', 'vieux')];
+    const { backend } = start('', {
+      handlers: {
+        closed_projects: () => kept,
+        erase_closed_project: (a: { id: string }) => void (kept = kept.filter((c) => c.id !== a.id)),
+      },
+    });
+    expect(await screen.findByRole('main')).toBeInTheDocument();
+    app.modal = { kind: 'settings' };
+    await userEvent.click(await screen.findByRole('tab', { name: 'Réseau' }));
+    await userEvent.type(screen.getByPlaceholderText('aucun'), 'http://proxy:3128');
+    await userEvent.click(screen.getByRole('tab', { name: 'Projets' }));
+    expect(await screen.findByText('ancien')).toBeInTheDocument();
+    expect(screen.getByText('vieux')).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole('button', { name: "Effacer l'historique…" })[0]);
+    await userEvent.click(await screen.findByRole('button', { name: "Effacer l'historique" }));
+    expect(backend.called('erase_closed_project')[0].args).toEqual({ id: 'c1' });
+    expect(await screen.findByText('vieux')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Projets' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByText('ancien')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Réseau' }));
+    expect(screen.getByPlaceholderText('aucun')).toHaveValue('http://proxy:3128');
+  });
+
+  it('closes a project keeping its history, or erasing it with the box of the question checked', async () => {
+    const { backend } = start('');
+    expect(await screen.findByRole('main')).toBeInTheDocument();
+    app.modal = { kind: 'settings' };
+    await userEvent.click(await screen.findByRole('tab', { name: 'Projets' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Fermer le projet…' }));
+    expect(
+      await screen.findByRole('checkbox', { name: 'Effacer aussi son historique (conversations, tickets, réglages)' }),
+    ).not.toBeChecked();
+    await userEvent.click(screen.getByRole('checkbox'));
+    await userEvent.click(screen.getByRole('button', { name: 'Fermer le projet' }));
+    expect(await screen.findByText('Aucun projet ouvert.')).toBeInTheDocument();
+    expect(backend.called('remove_project')[0].args).toEqual({ id: 'p1', erase: true });
   });
 
   it('opens « Rechercher dans les conversations » with Ctrl+K, and the message of the result chosen', async () => {

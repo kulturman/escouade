@@ -52,6 +52,8 @@ export interface Settings {
   voiceModel: string;
   /** « Dictée › Langue parlée »: `ui` (the interface's), `auto` (detected) or a language code. */
   voiceLanguage: string;
+  /** « Remote control pour tous les agents »: every agent of every project is reachable from claude.ai and the Claude app, unless set apart by hand (`Agent.remoteOff`). */
+  remoteControlAll: boolean;
 }
 
 /** A Claude account: Claude Code with a configuration folder of its own (its own sign-in, sessions and quota). */
@@ -264,6 +266,8 @@ export interface Project {
   agentBranchPrefix: string;
   /** « Préfixe des branches des tickets »: a ticket's own branch is `<prefix><key>`. */
   ticketBranchPrefix: string;
+  /** « Remote control pour les agents de ce projet »: each of its agents is reachable from claude.ai and the Claude app, unless set apart by hand (`Agent.remoteOff`). */
+  remoteControl: boolean;
 }
 
 /** « Rédigé par l'agent » (the agent is asked to commit) or « Direct, avec un message proposé ». */
@@ -297,6 +301,20 @@ export interface FoundRelease {
   version: string;
   notes: string;
 }
+
+/** An update check or download that failed, as the backend explains it. */
+export interface UpdateTrouble {
+  /** The cause, in the language of the interface. */
+  message: string;
+  /** Whether to tell the user now: a check asked for, or failures in a row for long enough. Otherwise it is retried in silence. */
+  show: boolean;
+  /** The page of the release, to take the installer from in the browser when the download is what failed. */
+  page: string | null;
+}
+
+export type CheckedUpdate = { kind: 'found'; update: FoundRelease } | { kind: 'none' } | { kind: 'failed'; trouble: UpdateTrouble };
+
+export type DownloadedUpdate = { kind: 'ready' } | { kind: 'superseded' } | { kind: 'failed'; trouble: UpdateTrouble };
 
 /** A command run in a worktree once it is made (setup) or before it is removed (teardown). */
 export interface WorktreeStep {
@@ -364,6 +382,8 @@ export interface Ticket {
   /** The same in the language of the texts for Claude (what the comment published for the team quotes); the window shows `outcome`. */
   outcomeClaude: string | null;
   outcomeUrl: string | null;
+  /** The commit its merge made on the target; null when it was not merged (pull request, push, kept, nothing to merge) or before 1.8. */
+  outcomeCommit: string | null;
   forced: boolean;
   reminded: boolean;
   cost: number;
@@ -375,6 +395,33 @@ export interface Ticket {
   external: ExternalRef | null;
   /** An existing branch its agent takes up; empty: its own, `ticket/<key>`, made at its start. */
   branch: string;
+  /** The model its agent runs, over the Kanban's (the MCP `start_ticket` sets it); empty: the Kanban's. */
+  model: string;
+  /** The effort its agent runs at, over the Kanban's; empty: the Kanban's. */
+  effort: string;
+  /** The images pasted or dropped in its form, in their order: its agent gets them with its first message. */
+  images: TicketImage[];
+}
+
+/** An image of a ticket: its content is a file of the ticket's folder, never in the tickets' JSON. */
+export interface TicketImage {
+  name: string;
+  mediaType: string;
+  /** Its file in the ticket's folder. */
+  file: string;
+}
+
+/** An image of a ticket with its content (base64), for its form to show. */
+export interface TicketImageData extends TicketImage {
+  data: string;
+}
+
+/** An image a ticket's form sends: one the ticket has (`file`), or one pasted or dropped (`data`, base64); the other one empty. */
+export interface DraftImage {
+  name: string;
+  mediaType: string;
+  file: string;
+  data: string;
 }
 
 export type BoardAction = 'merge' | 'pr' | 'push' | 'keep';
@@ -407,6 +454,8 @@ export interface TicketDraft {
   after: string[];
   /** An existing branch for its agent to take up; absent or empty: the ticket's own. Given again when editing, to keep it. */
   branch?: string;
+  /** Its images, the whole list; absent: they stay as they are. */
+  images?: DraftImage[];
 }
 
 export interface RecipeStep {
@@ -481,6 +530,9 @@ export interface PendingRequest {
   defaultNo: boolean;
 }
 
+/** Where an agent’s remote control comes from. */
+export type RemoteSource = 'hand' | 'project' | 'global';
+
 export interface Agent {
   id: string;
   projectId: string;
@@ -522,12 +574,23 @@ export interface Agent {
   liveTokens: number;
   /** Estimated cost (list prices) of the running turn so far; `cost` gets the exact figure at its end. */
   liveCost: number;
-  /** Remote Control: reachable from claude.ai / the Claude app (its process stays up). */
+  /** Remote Control: reachable from claude.ai / the Claude app (its process stays up), whatever turned it on. */
   remoteControl: boolean;
+  /** What turned it on: the user by hand, its project’s setting, or the setting for all agents; null while it is off. */
+  remoteSource: RemoteSource | null;
+  /** Set apart by hand (« Désactiver le remote control », a setting covering the agent or not): off in spite of a setting, until turned on by hand. */
+  remoteOff: boolean;
+  /** The Claude Code interface (« Vue Claude Code ») that runs was started with the remote control; null while no interface runs. */
+  interfaceRemote: boolean | null;
   remoteSession: string | null;
   /** The session on claude.ai. */
   remoteUrl: string | null;
-  /** Link state reported by Claude Code ("ready", "connected"…), null without a live link. */
+  /**
+   * Link state reported by Claude Code ("ready", "connected"…), null without a live link. In Claude Code's view it is the interface's,
+   * whatever the agent's remote control says (an open interface keeps its link until its next launch): "connected" (then `remoteUrl` is
+   * its session), "unavailable" when the interface runs but Claude Code did not open the remote control (no claude.ai subscription,
+   * network, proxy or organization policy; the agent's conversation says so in a notification), or null.
+   */
   remoteState: string | null;
   /** Stopped by the usage limit: when it is sent "continue" by itself (epoch ms). */
   resumeAt: number | null;
@@ -561,6 +624,18 @@ export interface Agent {
   terminal: boolean;
   /** The terminal of that interface while it runs. */
   terminalId: string | null;
+  /** How the last run of that interface ended; null until it ended (the backend puts it back to null when it starts one). */
+  tuiExit: TuiExit | null;
+}
+
+/** The end of Claude Code's interface (« Vue Claude Code »), as the backend saw it. */
+export interface TuiExit {
+  /** The exit code of its process (null: none, it was killed). */
+  code: number | null;
+  /** It stopped less than 20 s after it started: something is wrong, it is not the user quitting. */
+  quick: boolean;
+  /** Claude Code found no conversation for the session to resume: the backend already replaced it with a new one. */
+  sessionLost: boolean;
 }
 
 /** Where a plan's task list comes from: the agent's task tools (what the stream tells), or a plan file of its folder. */
@@ -604,6 +679,35 @@ export interface SubAgent {
   doing?: string;
   /** The id of the task it works on, when it can be told. */
   planTask?: string;
+  /** The call of the subagent that launched it, when one did (a subagent's subagent). */
+  parent?: string;
+  /** Claude Code's id of its task, once a frame told it: what « Arrêter » stops and what the agent writes to. */
+  taskId?: string;
+}
+
+/** What the conversation keeps of a subagent once it ended, on the item of its call: the plan forgets its row (30 at most, none after a reset). */
+export interface SubagentRun {
+  status: RunStatus;
+  tokens?: number;
+  tools: number;
+  startedAt: number;
+  endedAt?: number | null;
+}
+
+/** How a subagent's files stood when its transcript was last read (Claude Code view): the transcript's size in bytes, and when it last changed in ms (the later of it and its meta file). Given back to the next read, which answers `null` while nothing changed. */
+export interface TranscriptCursor {
+  len: number;
+  mtime: number;
+}
+
+/** What a read of a subagent's transcript gives in the Claude Code view (`subagent_transcript`; `null` instead when the cursor given is still current). */
+export interface SubagentRead {
+  /** Its whole thread, which replaces the one shown. */
+  items: ConvItem[];
+  /** The cursor to give back; null while there is no file yet (the next read looks for it again). */
+  cursor: TranscriptCursor | null;
+  /** How its files say it ended, which the view's frames never do (stopped in Claude Code's interface, an API error): the backend has ended its row of the plan then, if it still ran, and sent the agent. */
+  ended: 'stopped' | 'failed' | null;
 }
 
 /** A workflow of Claude Code the agent runs. */
@@ -923,10 +1027,16 @@ export interface ToolItem extends Base {
   status: 'running' | 'ok' | 'error' | 'interrupted';
   result?: ToolResult;
   ts: number;
+  /** The call of a subagent (`Agent` / `Task`): the report it handed back (`handback_report`, else the `summary` of a notification with no hand-back), 16 000 bytes of UTF-8 at most. */
+  report?: string;
+  /** The call of a subagent: what it was once it ended. */
+  run?: SubagentRun;
 }
 export interface QuestionItem extends Base {
   kind: 'question';
   toolUseId: string;
+  /** Asked by a subagent: the call that launched it. Shown in the agent's conversation and in the subagent's. */
+  sub?: string;
   questions: Question[];
   answers: Record<string, string> | null;
   /** Who answered, when it was a client of the MCP server and not the user in the window (an agent's name, « Claude (hors Escouade) »). */
@@ -937,6 +1047,8 @@ export interface QuestionItem extends Base {
 export interface PermissionItem extends Base {
   kind: 'permission';
   toolUseId: string;
+  /** Asked by a subagent: the call that launched it. Shown in the agent's conversation and in the subagent's. */
+  sub?: string;
   toolName: string;
   title?: string | null;
   description?: string | null;
@@ -1201,6 +1313,30 @@ export interface FolderInfo {
   branch: string;
   dirty: number;
   name: string;
+  /** The closed project this folder was (its history, kept), if it was one. */
+  history: ClosedProject | null;
+}
+
+/** A project closed with its history kept: what adding its folder again brings back. */
+export interface ClosedProject {
+  id: string;
+  name: string;
+  color: string;
+  path: string;
+  worktreePerAgent: boolean;
+  /** Its agents, the archived ones left out. */
+  agents: number;
+  tickets: number;
+  /** The latest of its agents' and tickets' dates (ms), else when it was closed. */
+  lastActivity: number;
+  closedAt: number;
+  /** What its history takes on the disk (bytes): its file, its conversations and its setup logs. */
+  size: number;
+  /**
+   * A file of the closed projects the app cannot read: `id` is its name without `.json`, the name, the color and
+   * the folder are empty, `size` is the file's alone and the dates are its last change. It can only be erased.
+   */
+  unreadable: boolean;
 }
 
 export interface SlashCommand {

@@ -6,14 +6,21 @@ import { SearchAddon } from '@xterm/addon-search';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { MAX_TOTAL, base64, clipboardImage, imageType, sizeLabel } from './attachments';
+import { echoWatch, type InputKind } from './echo-watch';
 import { t } from './i18n';
 import { api } from './ipc';
+import { openOutside, terminalLinks } from './links';
 import { IS_MAC } from './platform';
 import { isAppShortcut } from './shortcuts';
 import { app } from './state.svelte';
 import type { TermInfo } from './types';
+
+/** What draws a terminal; the DOM renderer says why it is not WebGL, WebGL the GPU's name. */
+export interface Renderer {
+  renderer: 'webgl' | 'dom';
+  detail?: string;
+}
 
 export interface XTerm {
   term: Terminal;
@@ -22,6 +29,12 @@ export interface XTerm {
   host: HTMLDivElement;
   /** A log: no input, no cursor. */
   readOnly?: boolean;
+  /** The backend's id of an interactive terminal, once it has one. */
+  id?: string;
+  renderer: Renderer;
+  /** When (`performance.now()`) a key went to the terminal, and the WebView's paste reached it: what tells the user's input from xterm.js's own. */
+  keyAt?: number;
+  pasteAt?: number;
 }
 
 const xterms = new Map<string, XTerm>();
@@ -34,6 +47,21 @@ function parkingLot(): HTMLDivElement {
     document.body.appendChild(parking);
   }
   return parking;
+}
+
+/** The size, in pixels, of the place a terminal is about to be shown in. */
+export interface Room {
+  width: number;
+  height: number;
+}
+
+/** What `el` has to draw in (its padding left out), or null when it has no size yet (not laid out, or hidden). */
+export function roomOf(el: HTMLElement): Room | null {
+  const style = getComputedStyle(el);
+  const px = (v: string) => parseFloat(v) || 0;
+  const width = el.clientWidth - px(style.paddingLeft) - px(style.paddingRight);
+  const height = el.clientHeight - px(style.paddingTop) - px(style.paddingBottom);
+  return width > 0 && height > 0 ? { width, height } : null;
 }
 
 /** Resolves any CSS color (oklch, color-mix, var()) to #rrggbb through a 1px canvas. */
@@ -81,8 +109,45 @@ export function terminalTheme(readOnly = false): ITheme {
 
 const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 
-/** A parked xterm.js instance; a read-only one takes no input (launch command logs). */
-function createXTerm(readOnly: boolean): XTerm {
+let gpu: { name?: string } | null = null;
+
+/**
+ * The GPU's name WebGL gives (a software one such as SwiftShader says so), read once per run of the app from a
+ * context of its own, given back at once: Chromium keeps 16 WebGL contexts and drops the oldest of the others.
+ */
+function gpuName(): string | undefined {
+  if (gpu) return gpu.name;
+  gpu = {};
+  let gl: WebGL2RenderingContext | null = null;
+  try {
+    gl = document.createElement('canvas').getContext('webgl2');
+    if (gl) {
+      const info = gl.getExtension('WEBGL_debug_renderer_info');
+      // Without it (hidden by the WebView) the generic name still tells WebGL is there.
+      gpu.name = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+    }
+  } catch {
+    // The name is only for the log.
+  }
+  try {
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  } catch {
+    // Left to the garbage collector.
+  }
+  return gpu.name;
+}
+
+/** Tells the log which renderer an interactive terminal has, once it has an id. */
+function reportRenderer(x: XTerm) {
+  if (x.id) api.termReport(x.id, { kind: 'renderer', ...x.renderer }).catch(() => {});
+}
+
+/**
+ * A parked xterm.js instance; a read-only one takes no input (launch command logs). With `room`, the size of the place it
+ * will be shown in, it is fitted to that place from the start, rather than to the parking lot's: the program it runs in a
+ * pseudo-console is started at that size, never at one a message of resize has to correct.
+ */
+function createXTerm(readOnly: boolean, room?: Room | null): XTerm {
   const term = new Terminal({
     fontFamily: "'JetBrains Mono', ui-monospace, monospace",
     fontSize: 12.5,
@@ -91,6 +156,8 @@ function createXTerm(readOnly: boolean): XTerm {
     cursorInactiveStyle: readOnly ? 'none' : 'outline',
     disableStdin: readOnly,
     allowProposedApi: true,
+    // The hyperlinks Claude Code writes (OSC 8) open in the system's browser, not through xterm.js's confirm() and window.open().
+    linkHandler: terminalLinks,
     scrollback: 10000,
     theme: terminalTheme(readOnly),
     // Rows added by a resize stay blank at the bottom, as in the pseudo-console, which repaints
@@ -98,7 +165,8 @@ function createXTerm(readOnly: boolean): XTerm {
     windowsPty: { backend: 'conpty' },
   });
   const host = document.createElement('div');
-  host.style.cssText = 'width:100%;height:100%;';
+  const filling = 'width:100%;height:100%;';
+  host.style.cssText = room ? `width:${room.width}px;height:${room.height}px;` : filling;
   parkingLot().appendChild(host);
   const fit = new FitAddon();
   const search = new SearchAddon();
@@ -106,17 +174,28 @@ function createXTerm(readOnly: boolean): XTerm {
   term.loadAddon(search);
   term.loadAddon(new Unicode11Addon());
   term.unicode.activeVersion = '11';
-  term.loadAddon(new WebLinksAddon((_e, uri) => openUrl(uri).catch(() => {})));
+  term.loadAddon(new WebLinksAddon((_e, uri) => openOutside(uri)));
   term.open(host);
+  const x: XTerm = { term, fit, search, host, readOnly, renderer: { renderer: 'dom' } };
   try {
     const webgl = new WebglAddon();
-    webgl.onContextLoss(() => webgl.dispose());
+    webgl.onContextLoss(() => {
+      webgl.dispose();
+      x.renderer = { renderer: 'dom', detail: 'WebGL context lost' };
+      reportRenderer(x);
+    });
     term.loadAddon(webgl);
-  } catch {
+    x.renderer = { renderer: 'webgl', detail: gpuName() };
+  } catch (e) {
     // Falls back to the DOM renderer.
+    x.renderer = { renderer: 'dom', detail: e instanceof Error ? e.message : String(e) };
   }
   fit.fit();
-  term.attachCustomKeyEventHandler((e) => {
+  // Whatever place it is shown in from now on, it fills it.
+  host.style.cssText = filling;
+  // The user's paste, noted on its way down, before xterm.js's own listeners get it.
+  host.addEventListener('paste', () => (x.pasteAt = performance.now()), true);
+  const keyToTerminal = (e: KeyboardEvent): boolean => {
     if (e.type !== 'keydown') return true;
     // Navigation shortcuts go to the app (the event keeps bubbling to its window handler).
     if (isAppShortcut(e)) return false;
@@ -141,8 +220,13 @@ function createXTerm(readOnly: boolean): XTerm {
     }
     // A log only scrolls (Shift+PageUp…): every other key goes on to the app's shortcuts.
     return !readOnly || (e.shiftKey && SCROLL_KEYS.has(e.key));
+  };
+  term.attachCustomKeyEventHandler((e) => {
+    const toTerminal = keyToTerminal(e);
+    if (toTerminal && e.type === 'keydown') x.keyAt = performance.now();
+    return toTerminal;
   });
-  return { term, fit, search, host, readOnly };
+  return x;
 }
 
 function free(x: XTerm) {
@@ -168,9 +252,13 @@ export function openAccountLogin(accountId: string): Promise<TermInfo> {
   return interactive((cols, rows, onData) => api.accountLogin(accountId, cols, rows, onData));
 }
 
-/** Claude Code's interface for the agent (« Vue Claude Code »): its session resumed in a terminal. */
-export async function openAgentTerminal(agentId: string): Promise<TermInfo> {
-  const info = await interactive((cols, rows, onData) => api.agentTerminal(agentId, cols, rows, onData));
+/**
+ * Claude Code's interface for the agent (« Vue Claude Code »): its session resumed in a terminal. Its full-screen interface
+ * draws on the rows of its pseudo-console and nowhere else, so it starts at the size of `room`, where it will be shown.
+ * `manual`: the user asked for it (« Relancer »), not the view of its own accord.
+ */
+export async function openAgentTerminal(agentId: string, room?: Room | null, manual = false): Promise<TermInfo> {
+  const info = await interactive((cols, rows, onData) => api.agentTerminal(agentId, cols, rows, onData, manual), room);
   pasteImages(xterms.get(info.id)!, agentId);
   return info;
 }
@@ -253,20 +341,103 @@ async function bracketed(term: Terminal) {
   while (!term.modes.bracketedPasteMode && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
 }
 
-/** An interactive terminal that `spawn` starts at the size of a new xterm.js instance, which then shows it. */
-async function interactive(spawn: (cols: number, rows: number, onData: (d: ArrayBuffer) => void) => Promise<TermInfo>): Promise<TermInfo> {
-  const x = createXTerm(false);
+const decoder = new TextDecoder();
+
+/**
+ * How soon after a key or a paste xterm.js emits what it types (synchronously, from the keydown, keypress, input or
+ * paste handling). What comes later is its own: focus, cursor and mouse reports, replies to the program's queries.
+ */
+const INPUT_WINDOW = 50;
+
+/** What the data xterm.js emits at `at` is, when the user typed or pasted it; null for what it writes by itself. */
+function userInput(x: XTerm, at: number): InputKind | null {
+  if (x.pasteAt !== undefined && at - x.pasteAt <= INPUT_WINDOW) return 'paste';
+  if (x.keyAt !== undefined && at - x.keyAt <= INPUT_WINDOW) return 'key';
+  return null;
+}
+
+/** How long after the backend refused a size it is told again (ms), and how many times at most. */
+const RESIZE_RETRY_AFTER = 500;
+const RESIZE_RETRIES = 5;
+
+/**
+ * An interactive terminal that `spawn` starts at the size of a new xterm.js instance, which then shows it (that of `room`,
+ * when it is known where it will be shown).
+ */
+async function interactive(
+  spawn: (cols: number, rows: number, onData: (d: ArrayBuffer) => void) => Promise<TermInfo>,
+  room?: Room | null,
+): Promise<TermInfo> {
+  const x = createXTerm(false, room);
   const { term } = x;
+  // The size the pseudo-console has: the one the program started at, then the last one the backend took. A program that draws
+  // on its rows (Claude Code's interface) never shows more than that, whatever xterm.js shows. The sizes are told in order and
+  // one at a time (the one that comes while another is on its way goes next), and one the backend did not take is told again
+  // soon, a few times, rather than left to a program that draws on fewer rows than the window shows.
+  const pty = { cols: term.cols, rows: term.rows };
+  let telling = false;
+  let refused = 0;
+  let again: ReturnType<typeof setTimeout> | undefined;
+  const tell = () => {
+    if (telling || !x.id) return;
+    const { cols, rows } = term;
+    if (cols === pty.cols && rows === pty.rows) return;
+    telling = true;
+    api.termResize(x.id, cols, rows).then(
+      () => {
+        pty.cols = cols;
+        pty.rows = rows;
+        refused = 0;
+        telling = false;
+        tell();
+      },
+      () => {
+        telling = false;
+        // A terminal that is gone refuses for good: not for ever.
+        if (++refused <= RESIZE_RETRIES) {
+          clearTimeout(again);
+          again = setTimeout(tell, RESIZE_RETRY_AFTER);
+        }
+      },
+    );
+  };
+  // Made before the spawn, whose output can come in before its answer: what is told waits for the id.
+  const watch = echoWatch({
+    now: () => performance.now(),
+    visible: () => document.visibilityState === 'visible',
+    report: (r) => {
+      if (x.id) api.termReport(x.id, r).catch(() => {});
+    },
+  });
+  // Every read of the backend is one message of the same bytes, in order: the bytes received so far name the read of an
+  // echo (measured or not, every chunk counts).
+  let outputBytes = 0;
   let info: TermInfo;
   try {
-    info = await spawn(term.cols, term.rows, (buf) => term.write(new Uint8Array(buf)));
+    info = await spawn(term.cols, term.rows, (buf) => {
+      outputBytes += buf.byteLength;
+      // The text is only decoded while a typed key waits for its echo.
+      const token = watch.received(() => decoder.decode(buf), outputBytes);
+      // xterm.js calls back once the data is parsed: the next animation frame is when it is drawn.
+      term.write(new Uint8Array(buf), token === null ? undefined : () => requestAnimationFrame(() => watch.painted(token)));
+    });
   } catch (e) {
     // Nothing to attach to: free the xterm instance, its WebGL context and its host.
     free(x);
     throw e;
   }
-  term.onData((d) => api.termWrite(info.id, d).catch(() => {}));
-  term.onResize(({ cols, rows }) => api.termResize(info.id, cols, rows).catch(() => {}));
+  x.id = info.id;
+  reportRenderer(x);
+  term.onData((d) => {
+    const kind = userInput(x, performance.now());
+    // The write goes out first and waits for nothing: its number is only for the report of a slow echo.
+    const seq = api.termWrite(info.id, d);
+    seq.catch(() => {});
+    if (kind) watch.sent({ data: d, kind, seq });
+  });
+  term.onResize(tell);
+  // Resized while the spawn was on its way (before it could be told).
+  tell();
   xterms.set(info.id, x);
   return info;
 }
@@ -318,10 +489,14 @@ export function mountTerminal(id: string, container: HTMLElement | null) {
   }
 }
 
-export function disposeTerminal(id: string) {
+/**
+ * Lets go of the terminal and stops its process. The promise settles once the backend has done it (or could not: it may
+ * be gone already), for what must not start again before: the backend attaches to an interface still running.
+ */
+export function disposeTerminal(id: string): Promise<void> {
   const x = xterms.get(id);
-  if (!x) return;
+  if (!x) return Promise.resolve();
   free(x);
   xterms.delete(id);
-  api.termKill(id).catch(() => {});
+  return api.termKill(id).catch(() => {});
 }

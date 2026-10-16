@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { Locator } from '@playwright/test';
 import { addProject, expect, send, test } from './fixture';
 
 test('a new project opens an agent that streams Claude’s reply', async ({ app }) => {
@@ -292,6 +293,31 @@ test('an agent in remote control shows what is sent to it from claude.ai', async
   await expect(card.locator('[data-tip*="Remote control"]')).toBeHidden();
 });
 
+test('the setting for all agents gives each one remote control, which one is set apart from by hand', async ({ app }) => {
+  const { page } = app;
+  await addProject(page, app.repo);
+  const card = page.locator('.card').first();
+  await page.getByRole('button', { name: 'Réglages (Ctrl+,)' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Réglages' });
+  await dialog.getByRole('tab', { name: 'Claude Code' }).click();
+  await dialog.getByRole('switch', { name: 'Remote control pour tous les agents' }).click();
+  // The project's own switch never says otherwise: on and grayed, with the reason.
+  await dialog.getByRole('tab', { name: 'Projets' }).click();
+  const own = dialog.getByRole('switch', { name: 'Remote control pour les agents de ce projet' });
+  await expect(own).toHaveAttribute('aria-checked', 'true');
+  await expect(own).toBeDisabled();
+  await expect(dialog.getByText('Activé pour tous les projets dans Réglages › Claude Code')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Enregistrer' }).click();
+  // The agent there was gets it, and its card says where it comes from.
+  await expect(card.locator('[data-tip*="Remote control : connecté"][data-tip*="activé par le réglage de tous les agents"]')).toBeVisible();
+  // Set apart by hand: off in spite of the setting.
+  await card.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Désactiver le remote control' }).click();
+  await expect(card.locator('[data-tip*="Remote control"]')).toBeHidden();
+  await card.click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: /Activer le remote control/ })).toBeVisible();
+});
+
 test('scrolling up slowly from the bottom of a conversation is never pulled back down', async ({ app }) => {
   const { page } = app;
   // The window of the CI runners: the first reply just fits, and the message field shrinking back
@@ -431,6 +457,65 @@ test('a terminal runs commands in the project folder', async ({ app }) => {
   await page.keyboard.type('Set-Content e2e-terminal.txt ok');
   await page.keyboard.press('Enter');
   await expect.poll(() => fs.existsSync(path.join(app.repo, 'e2e-terminal.txt')), { timeout: 20_000 }).toBe(true);
+});
+
+test('a keystroke whose echo comes late is noted in the log, with where the time went', async ({ app }) => {
+  const { page } = app;
+  await addProject(page, app.repo);
+  await page.getByRole('button', { name: 'Nouveau terminal' }).click();
+  await page.getByRole('menuitem', { name: /PowerShell/ }).click();
+  await expect(page.locator('.xterm')).toBeVisible();
+  await page.waitForTimeout(2500); // PowerShell start-up
+  await page.locator('.xterm').click();
+  // A program that answers each key 800 ms late: the time is the program's, the log must say so.
+  await page.keyboard.type('while ($true) { $k = [Console]::ReadKey($true); Start-Sleep -Milliseconds 800; [Console]::Write($k.KeyChar) }');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(1500);
+  const log = () => fs.readFileSync(path.join(app.data, 'app.log'), 'utf8');
+  const slow =
+    /echo of a 1-byte write shown after (\d+) ms: written (\d+) ms after the backend got it, first output (\d+) ms after, the echo (\d+) ms after/g;
+  const slowEchoes = () => [...log().matchAll(slow)];
+  // A key of the command slow to show (a loaded machine) took the terminal's one report in 10 s: wait for the next.
+  if (slowEchoes().length) await page.waitForTimeout(10_500);
+  const before = slowEchoes().length;
+  await page.keyboard.press('x');
+  await expect.poll(() => slowEchoes().length, { timeout: 15_000 }).toBeGreaterThan(before);
+  const [, total, , , program] = slowEchoes().at(-1)!.map(Number);
+  expect(total).toBeGreaterThanOrEqual(800);
+  expect(program).toBeGreaterThanOrEqual(700);
+  // Which renderer draws the terminal is there too.
+  expect(log()).toMatch(/\((pwsh|powershell)\): renderer (webgl|dom)/);
+});
+
+test('a terminal opens in the worktree of an agent from the + of the terminals and from its conversation’s header', async ({ app }) => {
+  const { page } = app;
+  await addProject(page, app.repo, { worktrees: true, firstAgent: false });
+  await page.getByRole('button', { name: '+ Nouvel agent' }).first().click();
+  const worktrees = path.join(app.repo, '.claude', 'worktrees');
+  await expect.poll(() => (fs.existsSync(worktrees) ? fs.readdirSync(worktrees) : [])).toEqual(['agent-1']);
+  const wt = path.join(worktrees, 'agent-1');
+  // The + builds its menu when clicked: the app must know of the worktree by then, not only the disk.
+  await expect(page.locator('.card').first()).toContainText('⎇ agent-1');
+  /** Writes a file from the terminal shown, which must be in the worktree. */
+  const write = async (file: string) => {
+    const term = page.locator('.xterm:visible');
+    await expect(term).toBeVisible();
+    await page.waitForTimeout(2500); // PowerShell start-up
+    await term.click();
+    await page.keyboard.type(`Set-Content ${file} ok`);
+    await page.keyboard.press('Enter');
+    await expect.poll(() => fs.existsSync(path.join(wt, file)), { timeout: 20_000 }).toBe(true);
+    expect(fs.existsSync(path.join(app.repo, file))).toBe(false);
+  };
+
+  await page.getByRole('button', { name: 'Nouveau terminal' }).click();
+  await page.getByRole('menuitem', { name: 'Dans le worktree de…' }).click();
+  await page.getByRole('menuitem', { name: 'agent-1', exact: true }).click();
+  await write('e2e-plus.txt');
+
+  await page.locator('.card').first().click();
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  await write('e2e-header.txt');
 });
 
 test('in the Claude Code view, a pasted image goes to Claude Code as a file, and pasted text as before', async ({ app }) => {
@@ -918,6 +1003,91 @@ test('a ticket is written in a large window, a long description included, and ad
   await page.keyboard.press('Escape');
   await expect(edit).toBeHidden();
   await expect(page.getByRole('button', { name: /DEM-2/ })).toBeFocused();
+});
+
+test('an image pasted or dropped in a ticket is kept in its folder, shown on its card, and reaches its agent with its first message', async ({
+  app,
+}) => {
+  const { page } = app;
+  // The window of the CI runners: the images do not make the form scroll.
+  await page.setViewportSize({ width: 1028, height: 779 });
+  await addProject(page, app.repo, { firstAgent: false });
+  await page.getByRole('button', { name: /^Kanban/ }).click();
+  // Nothing starts before « Lancer ».
+  await page.getByRole('switch', { name: 'Pilote auto' }).click();
+  await page.getByRole('button', { name: 'Nouveau ticket' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Nouveau ticket' });
+  await dialog.getByRole('textbox', { name: 'Titre du ticket' }).fill('Corriger le bouton [ok]');
+  const png = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13];
+  const gif = [71, 73, 70, 56, 57, 97];
+  // As WebView2 gives them: a screenshot pasted is a PNG file; a file dropped comes with the drop.
+  const give = (field: Locator, kind: 'paste' | 'drop', file: { name: string; type: string; bytes: number[] }) =>
+    field.evaluate(
+      (el, { kind, name, type, bytes }) => {
+        const data = new DataTransfer();
+        data.items.add(new File([new Uint8Array(bytes)], name, { type }));
+        const init = { bubbles: true, cancelable: true };
+        el.dispatchEvent(
+          kind === 'paste'
+            ? new ClipboardEvent('paste', { ...init, clipboardData: data })
+            : new DragEvent('drop', { ...init, dataTransfer: data }),
+        );
+      },
+      { kind, ...file },
+    );
+  await give(dialog.getByRole('textbox', { name: 'Description' }), 'paste', { name: 'image.png', type: 'image/png', bytes: png });
+  await give(dialog.getByRole('textbox', { name: "Critères d'acceptation" }), 'drop', {
+    name: 'maquette.gif',
+    type: 'image/gif',
+    bytes: gif,
+  });
+  const images = dialog.getByRole('list', { name: 'Images du ticket' });
+  await expect(images.getByRole('img', { name: 'image.png' })).toBeVisible();
+  await expect(images.getByRole('img', { name: 'maquette.gif' })).toBeVisible();
+  expect(await dialog.locator('.body').evaluate((body) => body.scrollHeight - body.clientHeight)).toBeLessThanOrEqual(1);
+  await dialog.getByRole('button', { name: 'Retirer maquette.gif' }).click();
+  await expect(images.getByRole('img')).toHaveCount(1);
+  await page.keyboard.press('Control+Enter');
+  await expect(dialog).toBeHidden();
+
+  // The card says it has one; the image is a file of the ticket's folder, out of the JSON of the tickets.
+  const card = page.getByRole('button', { name: 'DEM-1 Corriger le bouton [ok]', exact: true });
+  await expect(card).toHaveAccessibleDescription('1 image jointe');
+  await expect(card.locator('.clip')).toBeVisible();
+  const folders = path.join(app.data, 'tickets');
+  await expect.poll(() => fs.existsSync(folders) && fs.readdirSync(folders).length).toBe(1);
+  const folder = path.join(folders, fs.readdirSync(folders)[0]);
+  const files = fs.readdirSync(folder);
+  expect(files).toHaveLength(1);
+  expect([...fs.readFileSync(path.join(folder, files[0]))]).toEqual(png);
+  const base64 = Buffer.from(png).toString('base64');
+  await expect.poll(() => fs.readFileSync(path.join(app.data, 'state.json'), 'utf8')).toContain(files[0]);
+  expect(fs.readFileSync(path.join(app.data, 'state.json'), 'utf8')).not.toContain(base64);
+
+  // Opened again, it shows it.
+  await card.click();
+  const edit = page.getByRole('dialog', { name: 'Modifier DEM-1' });
+  await expect(edit.getByRole('img', { name: 'image.png' })).toHaveAttribute('src', `data:image/png;base64,${base64}`);
+  await page.keyboard.press('Escape');
+  await expect(edit).toBeHidden();
+
+  // Its agent gets it before the text of its first message.
+  await card.getByRole('button', { name: 'Lancer' }).click();
+  const stdin = path.join(path.dirname(app.data), 'fake-claude.stdin.jsonl');
+  const first = () =>
+    fs.existsSync(stdin)
+      ? fs
+          .readFileSync(stdin, 'utf8')
+          .trim()
+          .split('\n')
+          .map((l) => JSON.parse(l))
+          .find((m) => Array.isArray(m.message?.content))?.message.content
+      : undefined;
+  await expect.poll(first, { timeout: 30_000 }).toBeTruthy();
+  const content = first();
+  expect(content[0]).toEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } });
+  expect(content[1].text).toMatch(/^Ticket DEM-1 : Corriger le bouton \[ok\]/);
+  await expect(card).toHaveAccessibleDescription('1 image jointe');
 });
 
 test.describe('the first start', () => {

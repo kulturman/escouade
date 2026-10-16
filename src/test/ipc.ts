@@ -16,6 +16,9 @@ export interface Call {
   args: Record<string, any>;
 }
 
+/** What a command answers when a test gives it no handler: nothing (null), except the lists the window reads on its own. */
+const ANSWERS: Record<string, unknown> = { closed_projects: [] };
+
 export function fakeBackend(handlers: Record<string, (args: any) => unknown> = {}) {
   const calls: Call[] = [];
   mockWindows('main');
@@ -23,7 +26,7 @@ export function fakeBackend(handlers: Record<string, (args: any) => unknown> = {
     (cmd, args) => {
       calls.push({ cmd, args: (args ?? {}) as Record<string, any> });
       const h = handlers[cmd];
-      return h ? h(args) : null;
+      return h ? h(args) : (ANSWERS[cmd] ?? null);
     },
     { shouldMockEvents: true },
   );
@@ -71,6 +74,7 @@ export const SETTINGS: Settings = {
   terminalView: false,
   voiceModel: 'small-q5_1',
   voiceLanguage: 'ui',
+  remoteControlAll: false,
 };
 
 export function project(over: Partial<Project> = {}): Project {
@@ -92,6 +96,7 @@ export function project(over: Partial<Project> = {}): Project {
     worktreeDir: '',
     agentBranchPrefix: 'escouade/',
     ticketBranchPrefix: 'ticket/',
+    remoteControl: false,
     ...over,
   };
 }
@@ -130,6 +135,9 @@ export function agent(over: Partial<Agent> = {}): Agent {
     liveTokens: 0,
     liveCost: 0,
     remoteControl: false,
+    remoteSource: null,
+    remoteOff: false,
+    interfaceRemote: null,
     remoteSession: null,
     remoteUrl: null,
     remoteState: null,
@@ -147,6 +155,7 @@ export function agent(over: Partial<Agent> = {}): Agent {
     setup: null,
     terminal: false,
     terminalId: null,
+    tuiExit: null,
     isola: false,
     ...over,
   };
@@ -200,6 +209,7 @@ export function ticket(over: Partial<Ticket> = {}): Ticket {
     outcome: null,
     outcomeClaude: null,
     outcomeUrl: null,
+    outcomeCommit: null,
     forced: false,
     reminded: false,
     cost: 0,
@@ -209,6 +219,9 @@ export function ticket(over: Partial<Ticket> = {}): Ticket {
     doneAt: null,
     external: null,
     branch: '',
+    model: '',
+    effort: '',
+    images: [],
     ...over,
   };
 }
@@ -279,6 +292,10 @@ export function resetApp(over: { projects?: Project[]; agents?: Agent[]; tickets
   app.selectedTerm = {};
   app.filesOpen = false;
   app.planOpen = {};
+  app.subView = {};
+  app.subDrafts = {};
+  app.subFocus = { from: null, back: null };
+  app.subsOpen = {};
   app.filesScope = 'agent';
   app.panelTab = 'files';
   app.diffSplit = false;

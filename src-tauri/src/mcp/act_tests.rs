@@ -2,19 +2,24 @@
 //! repositories and the fake `claude`. Each does what the window does, under the guardrails of the
 //! window and the autopilot; every call, refused ones included, is in the activity log.
 
+use super::act::{board_change, board_changes};
 use super::tests::{ACTING, AGENTS_ONLY, EXPOSED};
+use super::tools::{SetBoardArgs, ToolError};
 use super::tools_tests::{
-    as_agent, external, keys, last_entry, other_project, project, put, put_agent, read, refused,
-    ticket, Client,
+    as_agent, external, keys, last_entry, link, other_project, project, put, put_agent, read,
+    refused, ticket, Client,
 };
 use crate::accounts::PRINCIPAL;
 use crate::board::clock;
 use crate::core::RESUME_MARGIN_MS;
-use crate::core_tests::{agent_on, harness, Harness};
+use crate::core_tests::{agent_on, git, harness, Harness};
 use crate::model::*;
 use crate::tickets::TicketDraft;
+use crate::tickets_tests::{conflicting, draft, gated_tests, reviewed, wait_running};
 use crate::usage::Reading;
+use base64::Engine;
 use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 
 /// A ticket made as the window makes one (at the end of « À faire »).
 async fn made(h: &Harness, p: &Project, title: &str) -> Ticket {
@@ -106,7 +111,24 @@ async fn the_acting_tools_say_what_they_take_and_that_they_change_things() {
         assert!(v["description"].as_str().unwrap().len() > 60, "{name}: {v}");
         // They change something: the client must not take them for reads.
         assert_eq!(v["annotations"]["readOnlyHint"], false, "{name}: {v}");
-        assert_eq!(v["annotations"]["openWorldHint"], false, "{name}: {v}");
+        // Only an approval may reach beyond Escouade (it may push and open a pull request).
+        assert_eq!(
+            v["annotations"]["openWorldHint"],
+            *name == "approve_ticket",
+            "{name}: {v}"
+        );
+        // And of the board's flow, only an approval and a deletion cannot be taken back.
+        let destructive = match *name {
+            "approve_ticket" | "delete_ticket" => Some(true),
+            "reject_ticket" | "resume_ticket" | "resolve_conflict" | "dismiss_block" => Some(false),
+            _ => None,
+        };
+        if let Some(destructive) = destructive {
+            assert_eq!(
+                v["annotations"]["destructiveHint"], destructive,
+                "{name}: {v}"
+            );
+        }
         for (arg, spec) in schema(name)["properties"].as_object().unwrap() {
             assert!(
                 spec["description"]
@@ -125,15 +147,85 @@ async fn the_acting_tools_say_what_they_take_and_that_they_change_things() {
     assert_eq!(required("update_ticket"), ["ticket"]);
     assert_eq!(required("move_ticket"), ["position", "ticket"]);
     assert_eq!(required("start_ticket"), ["ticket"]);
+    assert_eq!(required("set_board"), ["project"]);
     assert_eq!(required("create_agent"), ["message", "project"]);
     assert_eq!(required("send_message"), ["agent", "text"]);
     assert_eq!(required("stop_agent"), ["agent"]);
     assert_eq!(required("report_progress"), ["line"]);
     assert_eq!(required("split_ticket"), ["tickets"]);
+    assert_eq!(required("reject_ticket"), ["comment", "ticket"]);
+    for name in [
+        "approve_ticket",
+        "resume_ticket",
+        "resolve_conflict",
+        "dismiss_block",
+        "delete_ticket",
+    ] {
+        assert_eq!(required(name), ["ticket"], "{name}");
+    }
     let position = schema("move_ticket")["properties"]["position"].to_string();
     for p in ["top", "bottom", "before"] {
         assert!(position.contains(p), "{position}");
     }
+    // The Kanban's settings, named as `get_board` answers them (it can be given back as it is),
+    // the choices of the three that have a few written in the schema.
+    let board = schema("set_board");
+    let mut names: Vec<&str> = board["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "action",
+            "autopilot",
+            "cleanup",
+            "conflict",
+            "conventional",
+            "draft",
+            "effort",
+            "maxParallel",
+            "mode",
+            "model",
+            "project",
+            "strategy",
+            "target",
+            "testsFirst"
+        ]
+    );
+    for (arg, choices) in [
+        ("action", &["merge", "pr", "push", "keep"][..]),
+        ("strategy", &["merge", "squash", "rebase"]),
+        ("conflict", &["ask", "agent", "abort"]),
+    ] {
+        let spec = board["properties"][arg].to_string();
+        for choice in choices {
+            assert!(spec.contains(choice), "{arg}: {spec}");
+        }
+    }
+    // What a refusal comes of is said before the call: the mode that is the user's to give, the
+    // test command it does not set.
+    let (mode, tests) = (
+        board["properties"]["mode"]["description"].as_str().unwrap(),
+        board["properties"]["testsFirst"]["description"]
+            .as_str()
+            .unwrap(),
+    );
+    assert!(mode.contains("bypassPermissions"), "{mode}");
+    assert!(tests.contains("test command"), "{tests}");
+    // And the tool says it is for the next tickets' agents, not the ones already at work.
+    let described = tools.iter().find(|t| t.name == "set_board").unwrap();
+    let said = serde_json::to_value(described).unwrap()["description"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        said.contains("bypassPermissions") && said.contains("already"),
+        "{said}"
+    );
     assert!(
         schema("report_progress")["properties"]["line"]["description"]
             .as_str()
@@ -183,7 +275,15 @@ async fn a_ticket_is_created_in_to_do_with_its_criteria_and_what_it_comes_after(
             "column": "todo",
             "after": [],
             "progress": [],
+            "images": [],
             "external": null,
+            "agent": null,
+            "branch": null,
+            "worktree": null,
+            "blocked": null,
+            "conflict": false,
+            "step": null,
+            "outcome": null,
         })
     );
     // Made on the board, the window told as it is for a ticket made there.
@@ -274,6 +374,54 @@ async fn a_ticket_is_created_in_to_do_with_its_criteria_and_what_it_comes_after(
     .await;
     assert!(too_long.contains("200"), "{too_long}");
     assert_eq!(h.core.tickets.read().len(), before + 1);
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_lists_its_images() {
+    use crate::tickets::DraftImage;
+    use base64::Engine;
+    let h = harness("mcp-act-ticket-images");
+    let p = project(&h).await;
+    let image = |name: &str| DraftImage {
+        name: name.into(),
+        media_type: "image/png".into(),
+        data: base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\n-capture"),
+        ..Default::default()
+    };
+    let t = h
+        .core
+        .ticket_create(
+            &p.id,
+            TicketDraft {
+                title: "Avec des images".into(),
+                images: Some(vec![image("a.png"), image("b.png")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let plain = made(&h, &p, "Sans image").await;
+    let c = external(&h).await;
+    let got = read(&c, "get_ticket", json!({ "ticket": t.key })).await;
+    let names: Vec<&str> = got["images"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["a.png", "b.png"], "{got}");
+    // The tools that change a ticket answer with it as it is, images kept.
+    let updated = read(
+        &c,
+        "update_ticket",
+        json!({ "ticket": t.key, "title": "Avec deux images" }),
+    )
+    .await;
+    assert_eq!(updated["images"], got["images"], "{updated}");
+    let none = read(&c, "get_ticket", json!({ "ticket": plain.key })).await;
+    assert_eq!(none["images"], json!([]), "{none}");
     c.cancel().await.unwrap();
     h.core.mcp.stop();
 }
@@ -1619,6 +1767,7 @@ async fn an_agent_acts_on_its_own_project_alone_and_reads_the_others() {
             json!({ "ticket": t_other.key, "position": "top" }),
         ),
         ("start_ticket", json!({ "ticket": t_other.key })),
+        ("set_board", json!({ "project": "autre", "draft": true })),
         (
             "create_agent",
             json!({ "project": other.id, "message": "x" }),
@@ -1969,6 +2118,2235 @@ async fn a_message_is_refused_when_the_account_of_the_agent_it_goes_to_is_held_a
     )
     .await;
     turn_over(&h, &main.id).await;
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+// ---------- the board's flow: approve, send back, resume, resolve, dismiss, delete ----------
+
+/// A ticket of `p` in `column` with an agent of its own, as the app keeps them (no process): the
+/// ticket and the agent name each other.
+fn staffed(h: &Harness, p: &Project, key: &str, column: Column, at: i64) -> (Ticket, AgentMeta) {
+    let t = put(h, ticket(p, key, key, column, at));
+    let a = put_agent(h, p, &format!("agent-{}", key.to_lowercase()), at);
+    link(h, &a.id, &t.id);
+    (stored(h, &t.id), a)
+}
+
+/// `t` with its approval running (at its `step`).
+fn approving(h: &Harness, t: &Ticket, step: &str) -> Ticket {
+    h.core
+        .edit_ticket(&t.id, |x| {
+            x.step = Some(step.into());
+            Ok(())
+        })
+        .unwrap();
+    stored(h, &t.id)
+}
+
+/// What an action answered as the ticket's state before it: the one mark of its `since`, the
+/// cursor `wait_ticket` takes.
+fn before_of(answer: &Value) -> Value {
+    let since = answer["since"].as_str().expect("an answer with a since");
+    let marks: Value = serde_json::from_slice(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(since)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(marks.as_array().map(Vec::len), Some(1), "{marks}");
+    marks[0].clone()
+}
+
+/// What `wait_ticket` tells of `key` from the `since` an action answered: at once, well before the
+/// 20 seconds the wait is given.
+async fn told_since(c: &Client, key: &str, since: &Value) -> Value {
+    let began = Instant::now();
+    let v = read(
+        c,
+        "wait_ticket",
+        json!({ "tickets": [key], "timeout": 20, "since": since }),
+    )
+    .await;
+    assert!(began.elapsed() < Duration::from_secs(10), "{v}");
+    v
+}
+
+/// What `tool` turns `args` down with, as the activity log says it (`outcome`: « refused » for a
+/// guard, « error » for something asked that does not fit), and that `left` is as it was.
+async fn turned_down(
+    h: &Harness,
+    c: &Client,
+    tool: &'static str,
+    args: Value,
+    outcome: &str,
+    left: &Ticket,
+) -> String {
+    let why = refused(c, tool, args).await;
+    let logged = entry(h);
+    assert_eq!(
+        (
+            logged.tool.as_str(),
+            logged.outcome,
+            logged.message.as_deref()
+        ),
+        (tool, outcome, Some(why.as_str()))
+    );
+    assert_eq!(&stored(h, &left.id), left, "{tool}: {why}");
+    why
+}
+
+const NOT_IN_REVIEW: &str = "Ce ticket n'est pas à tester.";
+const APPROVING: &str = "La validation de ce ticket est déjà en cours.";
+const NOT_BLOCKED: &str = "Ce ticket n’est pas bloqué.";
+/// What the core says of a ticket that is not blocked when it is resumed: not the words of `dismiss_block`.
+const RESUME_NOT_BLOCKED: &str = "Ce ticket n'est pas bloqué.";
+const OWN_TICKET: &str = "Un agent n’agit pas sur son propre ticket avec cet outil : c’est à l’utilisateur ou à un autre client de le faire.";
+
+#[tokio::test]
+async fn the_tools_of_the_flow_refuse_an_agent_that_acts_on_its_own_ticket_or_on_another_projects()
+{
+    let h = harness("mcp-act-flow-agents");
+    let p = project(&h).await;
+    let other = other_project(&h, "autre").await;
+    let (own, agent) = staffed(&h, &p, "DEM-1", Column::Review, 1);
+    // Its record names the ticket though the ticket names another agent: it is the same ticket.
+    let relieved = put_agent(&h, &p, "releve", 2);
+    h.core.agent(&relieved.id).unwrap().lock().meta.ticket_id = Some(own.id.clone());
+    let elsewhere = put_agent(&h, &other, "ailleurs", 3);
+    let args = |tool: &str| match tool {
+        "reject_ticket" => json!({ "ticket": own.key, "comment": "Pas bon" }),
+        _ => json!({ "ticket": own.key }),
+    };
+    for (tool, said) in [
+        (
+            "approve_ticket",
+            "Un agent ne valide pas son propre ticket : il fusionnerait son travail sans relecture.",
+        ),
+        (
+            "reject_ticket",
+            "Un agent ne renvoie pas son propre ticket.",
+        ),
+        ("resume_ticket", OWN_TICKET),
+        ("resolve_conflict", OWN_TICKET),
+        ("dismiss_block", OWN_TICKET),
+        ("delete_ticket", OWN_TICKET),
+    ] {
+        // Whatever state the ticket is in, the agent that works on it is refused first.
+        for (who, caller) in [("its agent", &agent), ("the one its record names", &relieved)] {
+            let c = as_agent(&h, &caller.id).await;
+            let why = turned_down(&h, &c, tool, args(tool), "refused", &own).await;
+            assert_eq!(why, said, "{tool}, {who}");
+            assert_eq!(entry(&h).caller, caller.name, "{tool}, {who}");
+            c.cancel().await.unwrap();
+        }
+        // An agent of another project acts on its own project alone.
+        let c = as_agent(&h, &elsewhere.id).await;
+        let why = turned_down(&h, &c, tool, args(tool), "refused", &own).await;
+        assert_eq!(
+            why,
+            "L’agent ailleurs n’agit que dans son propre projet (autre) : le projet demo n’est pas le sien.",
+            "{tool}"
+        );
+        c.cancel().await.unwrap();
+        // Claude outside Escouade acts on any (what it does is checked by each tool's own test):
+        // an unknown ticket is told so, for every tool.
+        let c = external(&h).await;
+        let none = refused(&c, tool, json!({ "ticket": "ZZZ-9", "comment": "x" })).await;
+        assert!(none.contains("Aucun ticket « ZZZ-9 »"), "{tool}: {none}");
+        assert_eq!(entry(&h).outcome, "error", "{tool}");
+        c.cancel().await.unwrap();
+    }
+    assert_eq!(stored(&h, &own.id), own);
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_is_not_approved_where_the_window_does_not_offer_it() {
+    let h = harness("mcp-act-approve-guards");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    let ask = |t: &Ticket| json!({ "ticket": t.key });
+    // Not in « À tester ».
+    for (i, column) in [Column::Todo, Column::Doing, Column::Done]
+        .into_iter()
+        .enumerate()
+    {
+        let t = put(
+            &h,
+            ticket(&p, &format!("DEM-{}", i + 1), "Ailleurs", column, 1),
+        );
+        let why = turned_down(&h, &c, "approve_ticket", ask(&t), "refused", &t).await;
+        assert_eq!(why, NOT_IN_REVIEW, "{column:?}");
+    }
+    // Its agent works: its files would be committed mid-write.
+    let (busy, agent) = staffed(&h, &p, "DEM-4", Column::Review, 4);
+    h.core.agent(&agent.id).unwrap().lock().meta.status = AgentStatus::Running;
+    let why = turned_down(&h, &c, "approve_ticket", ask(&busy), "refused", &busy).await;
+    assert_eq!(
+        why,
+        "L'agent de ce ticket travaille encore : attends la fin de son tour pour valider."
+    );
+    // Its approval already runs.
+    let (running, _) = staffed(&h, &p, "DEM-5", Column::Review, 5);
+    let running = approving(&h, &running, "Tests…");
+    let why = turned_down(&h, &c, "approve_ticket", ask(&running), "refused", &running).await;
+    assert_eq!(why, APPROVING);
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_is_approved_in_the_background_merged_and_its_merge_commit_kept() {
+    let h = harness("mcp-act-approve");
+    let (p, r) = h.project(false).await;
+    // Held at its tests, to see the approval under way.
+    let go = h.dir.join("go");
+    h.set_board(&p.id, |s| {
+        s.tests_first = true;
+        s.test_command = gated_tests(&go, 0);
+    });
+    let (t, wt) = reviewed(&h, &p.id, "Fichier [ok]").await;
+    let agent = t.agent_id.clone().unwrap();
+    let c = external(&h).await;
+    let seen = ticket_events(&h, &t.id);
+    let v = read(&c, "approve_ticket", json!({ "ticket": "dem-1" })).await;
+    // It answers while the approval runs: the ticket as `get_ticket` gives it, not yet merged.
+    assert_eq!(
+        (v["key"].as_str(), v["column"].as_str()),
+        (Some("DEM-1"), Some("review"))
+    );
+    let logged = entry(&h);
+    assert_eq!(
+        (
+            logged.caller.as_str(),
+            logged.tool.as_str(),
+            logged.summary.as_str(),
+            logged.outcome
+        ),
+        (
+            "Claude (hors Escouade)",
+            "approve_ticket",
+            "ticket: dem-1",
+            "ok"
+        )
+    );
+    h.wait_ticket(&t.id, "its tests to run", |t| {
+        t.step.as_deref() == Some("Tests…")
+    })
+    .await;
+    // The window was told of it, as of an approval made there.
+    assert!(ticket_events(&h, &t.id) > seen);
+    // A second approval meanwhile is refused as the window's.
+    let again = refused(&c, "approve_ticket", json!({ "ticket": t.key })).await;
+    assert_eq!(again, APPROVING);
+    assert_eq!(entry(&h).outcome, "refused");
+    // The tests pass: the rest goes by itself, as for the window's approval.
+    std::fs::write(&go, "").unwrap();
+    h.wait_ticket(&t.id, "the ticket to be done", |t| t.column == Column::Done)
+        .await;
+    let done = stored(&h, &t.id);
+    assert_eq!(done.outcome.as_deref(), Some("⤵ Mergé dans main · squash"));
+    assert_eq!(
+        (done.step.as_deref(), done.blocked.as_deref()),
+        (None, None)
+    );
+    // Its merge commit is kept: the target's head.
+    let head = git(&r, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(done.outcome_commit.as_deref(), Some(head.as_str()));
+    // A client reads it with `get_ticket`, with the outcome's text.
+    let read_back = read(&c, "get_ticket", json!({ "ticket": t.key })).await;
+    assert_eq!(
+        read_back["outcome"],
+        json!({ "text": "⤵ Mergé dans main · squash", "url": null, "commit": head })
+    );
+    assert_eq!(git(&r, &["rev-list", "--count", "HEAD"]), "2");
+    assert_eq!(
+        std::fs::read_to_string(r.join("dem-1.txt")).unwrap(),
+        "Boucle 1\n"
+    );
+    // Cleaned up: its agent archived, its worktree gone. The ticket is done before its cleanup ends
+    // (`Core::approve_run`), which goes on in the background: waited for, not looked at once.
+    h.wait("its agent archived and its worktree removed", |h| {
+        h.agent(&agent).archived && !wt.exists()
+    })
+    .await;
+    assert!(h.events.lock().iter().any(|e| e["type"] == "ticket"
+        && e["ticket"]["id"] == t.id.as_str()
+        && e["ticket"]["column"] == "done"));
+    // Done: nothing more to approve.
+    let late = refused(&c, "approve_ticket", json!({ "ticket": t.key })).await;
+    assert_eq!(late, NOT_IN_REVIEW);
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn an_approval_made_through_the_server_is_counted_in_the_usage_statistics_as_the_windows_is()
+{
+    let h = harness("mcp-act-approve-counted");
+    let (p, _) = h.project(false).await;
+    let (t, _) = reviewed(&h, &p.id, "Fichier [ok]").await;
+    // Counted from now on: saying yes counts the start.
+    h.core.set_telemetry(true).unwrap();
+    let counted = || -> Vec<Value> {
+        let events = h.core.telemetry.pending();
+        events.into_iter().map(|e| e["eventName"].clone()).collect()
+    };
+    assert_eq!(counted(), [json!("app_started")]);
+    let c = external(&h).await;
+    // Refused, as the window's would be: nothing happened, nothing is counted.
+    h.core
+        .edit_ticket(&t.id, |x| {
+            x.column = Column::Doing;
+            Ok(())
+        })
+        .unwrap();
+    refused(&c, "approve_ticket", json!({ "ticket": t.key })).await;
+    assert_eq!(counted(), [json!("app_started")]);
+    h.core
+        .edit_ticket(&t.id, |x| {
+            x.column = Column::Review;
+            Ok(())
+        })
+        .unwrap();
+    read(&c, "approve_ticket", json!({ "ticket": t.key })).await;
+    assert_eq!(counted(), [json!("app_started"), json!("ticket_approved")]);
+    h.wait_ticket(&t.id, "the ticket to be done", |t| t.column == Column::Done)
+        .await;
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_whose_branch_was_merged_already_is_closed_without_merging_again() {
+    let h = harness("mcp-act-approve-nothing");
+    let (p, r) = h.project(false).await;
+    let (t, wt) = reviewed(&h, &p.id, "Fichier [ok] [commite]").await;
+    // Merged by hand: squashed on the target, then its branch taken back to the target.
+    git(&r, &["merge", "--squash", "ticket/dem-1"]);
+    git(&r, &["commit", "-qm", "À la main"]);
+    git(&wt, &["reset", "--keep", "main"]);
+    let head = git(&r, &["rev-parse", "refs/heads/main"]);
+    let commits = git(&r, &["rev-list", "--count", "main"]);
+    let c = external(&h).await;
+    read(&c, "approve_ticket", json!({ "ticket": t.key })).await;
+    h.wait_ticket(&t.id, "the ticket to be done", |t| t.column == Column::Done)
+        .await;
+    let done = stored(&h, &t.id);
+    assert_eq!(done.outcome.as_deref(), Some("∅ Aucune modification"));
+    // Nothing merged: the target is as it was, and no merge commit is kept.
+    assert_eq!(git(&r, &["rev-parse", "refs/heads/main"]), head);
+    assert_eq!(git(&r, &["rev-list", "--count", "main"]), commits);
+    assert_eq!(done.outcome_commit, None);
+    // Its agent is archived once the ticket is done, by the approval that goes on in the background.
+    let agent = done.agent_id.clone().unwrap();
+    h.wait("its agent archived", |h| h.agent(&agent).archived)
+        .await;
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_fast_approval_is_told_by_the_since_its_answer_gave_when_the_wait_comes_after_its_end() {
+    let h = harness("mcp-act-approve-since");
+    let (p, r) = h.project(false).await;
+    let (t, wt) = reviewed(&h, &p.id, "Fichier [ok] [commite]").await;
+    // Nothing to merge: the approval ends at once, before a wait could take its baseline.
+    git(&r, &["merge", "--squash", "ticket/dem-1"]);
+    git(&r, &["commit", "-qm", "À la main"]);
+    git(&wt, &["reset", "--keep", "main"]);
+    let c = external(&h).await;
+    let v = read(&c, "approve_ticket", json!({ "ticket": t.key })).await;
+    // The ticket as it was before the approval: in review, its agent at rest.
+    let before = before_of(&v);
+    assert_eq!(
+        (&before["id"], &before["column"], &before["resting"]),
+        (&json!(t.id), &json!("review"), &json!(true))
+    );
+    h.wait_ticket(&t.id, "the ticket to be done", |t| t.column == Column::Done)
+        .await;
+    // A wait that begins now would see a ticket done and nothing more: with the answer's since it
+    // is told at once that the ticket left « À tester ».
+    let told = told_since(&c, &t.key, &v["since"]).await;
+    assert_eq!(told["changed"], json!(true));
+    assert!(
+        told["changes"][0]["what"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("column")),
+        "{told}"
+    );
+    assert_eq!(told["changes"][0]["before"]["column"], json!("review"));
+    assert_eq!(told["tickets"][0]["column"], json!("done"));
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn an_approval_that_fails_blocks_the_ticket_in_to_review_and_the_server_has_answered() {
+    let h = harness("mcp-act-approve-fails");
+    let (p, r) = h.project(false).await;
+    let (t, _) = reviewed(&h, &p.id, "Fichier [ok]").await;
+    // The project's folder has changes of its own on the target: the merge is refused.
+    std::fs::write(r.join("src").join("app.ts"), "const a = 99; // en cours\n").unwrap();
+    let c = external(&h).await;
+    read(&c, "approve_ticket", json!({ "ticket": t.key })).await;
+    assert_eq!(entry(&h).outcome, "ok");
+    h.wait_ticket(&t.id, "the ticket to be blocked", |t| t.blocked.is_some())
+        .await;
+    let blocked = stored(&h, &t.id);
+    assert_eq!(
+        (
+            blocked.column,
+            blocked.step.as_deref(),
+            blocked.blocked.as_deref()
+        ),
+        (
+            Column::Review,
+            None,
+            Some("Le dossier du projet a des modifications non commitées sur main")
+        )
+    );
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_is_sent_back_with_the_comment_followed_by_who_sent_it_back() {
+    let h = harness("mcp-act-reject");
+    let (p, _) = h.project(false).await;
+    let (t, wt) = reviewed(&h, &p.id, "Renvoi [ok]").await;
+    let agent = t.agent_id.clone().unwrap();
+    let c = external(&h).await;
+    let v = read(
+        &c,
+        "reject_ticket",
+        json!({ "ticket": "dem-1", "comment": "  Le bouton est mal placé.  " }),
+    )
+    .await;
+    // Back in progress, with the same agent.
+    assert_eq!(
+        (v["key"].as_str(), v["column"].as_str()),
+        (Some("DEM-1"), Some("doing"))
+    );
+    // Its since is the ticket as it was: in review, its agent at rest.
+    let before = before_of(&v);
+    assert_eq!(
+        (&before["column"], &before["resting"]),
+        (&json!("review"), &json!(true))
+    );
+    let logged = entry(&h);
+    assert_eq!(
+        (
+            logged.caller.as_str(),
+            logged.tool.as_str(),
+            logged.summary.as_str(),
+            logged.outcome
+        ),
+        (
+            "Claude (hors Escouade)",
+            "reject_ticket",
+            "ticket: dem-1 · comment: Le bouton est mal placé.",
+            "ok"
+        )
+    );
+    // The agent reads the comment as test feedback, never as the user's words: it says who sent it.
+    h.wait_sent(
+        &wt,
+        "Retour de test sur DEM-1 : Le bouton est mal placé (renvoyé par Claude (hors Escouade) via Escouade). Corrige, revérifie tous les critères, puis termine par le bilan.",
+    )
+    .await;
+    h.wait_ticket(&t.id, "to test again", |t| t.column == Column::Review)
+        .await;
+    let back = stored(&h, &t.id);
+    // Loop 1 again, its second loop all the same.
+    assert_eq!(
+        (back.agent_id.as_deref(), back.iteration, back.loops),
+        (Some(agent.as_str()), 1, 2)
+    );
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_sent_back_by_an_agent_names_it_in_the_language_of_the_texts_for_claude() {
+    let h = harness("mcp-act-reject-en");
+    let (p, _) = h.project(false).await;
+    h.set_settings(|s| s.claude_language = "en".into());
+    let (t, wt) = reviewed(&h, &p.id, "Rework [ok]").await;
+    let reviewer = put_agent(&h, &p, "relecteur", 5);
+    let c = as_agent(&h, &reviewer.id).await;
+    read(
+        &c,
+        "reject_ticket",
+        json!({ "ticket": t.key, "comment": "the button is misplaced" }),
+    )
+    .await;
+    h.wait_sent(
+        &wt,
+        "Test feedback on DEM-1: the button is misplaced (sent back by relecteur through Escouade). Fix it, check every criterion again, then end with the report.",
+    )
+    .await;
+    h.wait_ticket(&t.id, "to test again", |t| t.column == Column::Review)
+        .await;
+    assert_eq!(entry(&h).caller, "relecteur");
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_is_not_sent_back_without_a_comment_or_where_the_window_does_not_offer_it() {
+    let h = harness("mcp-act-reject-guards");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    let ask = |t: &Ticket| json!({ "ticket": t.key, "comment": "Pas bon" });
+    let (review, agent) = staffed(&h, &p, "DEM-1", Column::Review, 1);
+    // A comment is needed, a blank one is none: something asked that does not fit.
+    for blank in ["", "   \n "] {
+        let why = turned_down(
+            &h,
+            &c,
+            "reject_ticket",
+            json!({ "ticket": review.key, "comment": blank }),
+            "error",
+            &review,
+        )
+        .await;
+        assert_eq!(why, "Dis ce qui ne va pas.");
+    }
+    // Not in « À tester ».
+    for (i, column) in [Column::Todo, Column::Doing, Column::Done]
+        .into_iter()
+        .enumerate()
+    {
+        let t = put(
+            &h,
+            ticket(&p, &format!("DEM-{}", i + 2), "Ailleurs", column, 1),
+        );
+        let why = turned_down(&h, &c, "reject_ticket", ask(&t), "refused", &t).await;
+        assert_eq!(why, NOT_IN_REVIEW, "{column:?}");
+    }
+    // Without an agent to send it to.
+    let orphan = put(&h, ticket(&p, "DEM-5", "Orphelin", Column::Review, 5));
+    let why = turned_down(&h, &c, "reject_ticket", ask(&orphan), "refused", &orphan).await;
+    assert_eq!(why, "Ce ticket n'a pas d'agent.");
+    // Its agent works: the end of that turn would be read as the end of the rework.
+    let (busy, worker) = staffed(&h, &p, "DEM-6", Column::Review, 6);
+    h.core.agent(&worker.id).unwrap().lock().meta.status = AgentStatus::Running;
+    let why = turned_down(&h, &c, "reject_ticket", ask(&busy), "refused", &busy).await;
+    assert_eq!(
+        why,
+        "L'agent de ce ticket travaille encore : attends la fin de son tour pour le renvoyer."
+    );
+    // Its approval runs.
+    let (running, _) = staffed(&h, &p, "DEM-7", Column::Review, 7);
+    let running = approving(&h, &running, "Merge…");
+    let why = turned_down(&h, &c, "reject_ticket", ask(&running), "refused", &running).await;
+    assert_eq!(why, APPROVING);
+    // Nothing was sent to any agent.
+    assert_eq!(h.agent(&agent.id).prompts, 0);
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_is_not_sent_back_while_its_agents_account_is_held_back_and_only_then() {
+    let h = harness("mcp-act-reject-accounts");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    let end = h.core.pause_now() + 3_600_000;
+    used_up(&h, PRINCIPAL, end);
+    let ask = |t: &Ticket| json!({ "ticket": t.key, "comment": "Pas bon" });
+    // Where the window would go ahead, the message would spend the held account's quota.
+    let (review, agent) = staffed(&h, &p, "DEM-1", Column::Review, 1);
+    let held = turned_down(&h, &c, "reject_ticket", ask(&review), "refused", &review).await;
+    assert!(
+        held.contains("pause")
+            && held.contains("5 h")
+            && held.contains(&clock(end + RESUME_MARGIN_MS)),
+        "{held}"
+    );
+    assert_eq!(h.agent(&agent.id).prompts, 0);
+    // Where it would not, the window's own refusal is the one told.
+    let (running, _) = staffed(&h, &p, "DEM-2", Column::Review, 2);
+    let running = approving(&h, &running, "Tests…");
+    let why = turned_down(&h, &c, "reject_ticket", ask(&running), "refused", &running).await;
+    assert_eq!(why, APPROVING);
+    let (doing, _) = staffed(&h, &p, "DEM-3", Column::Doing, 3);
+    let why = turned_down(&h, &c, "reject_ticket", ask(&doing), "refused", &doing).await;
+    assert_eq!(why, NOT_IN_REVIEW);
+    // Its agent works, on the held account all the same: the window says it first.
+    let (busy, worker) = staffed(&h, &p, "DEM-4", Column::Review, 4);
+    h.core.agent(&worker.id).unwrap().lock().meta.status = AgentStatus::Running;
+    let why = turned_down(&h, &c, "reject_ticket", ask(&busy), "refused", &busy).await;
+    assert_eq!(
+        why,
+        "L'agent de ce ticket travaille encore : attends la fin de son tour pour le renvoyer."
+    );
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+/// The block of a ticket whose agent got no message: Claude Code is nowhere to be found.
+const NO_CLAUDE_BLOCK: &str =
+    "Erreur : Claude Code introuvable. Installe-le ou indique son chemin dans les réglages.";
+
+/// What a tool says when its message failed after the ticket moved.
+fn unsent(key: &str) -> String {
+    format!("{key} a été pris en compte, mais son agent n’a pas reçu le message : Claude Code introuvable. Installe-le ou indique son chemin dans les réglages. Le ticket est bloqué avec cette raison.")
+}
+
+#[tokio::test]
+async fn a_message_that_fails_after_the_ticket_moved_says_so_and_the_ticket_is_blocked_with_the_reason(
+) {
+    let h = harness("mcp-act-unsent");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    h.lose_claude();
+    // Sent back: in progress again, blocked, and the call is not told as a refusal.
+    let (review, _) = staffed(&h, &p, "DEM-1", Column::Review, 1);
+    let said = refused(
+        &c,
+        "reject_ticket",
+        json!({ "ticket": review.key, "comment": "Pas bon" }),
+    )
+    .await;
+    assert_eq!(said, unsent("DEM-1"));
+    let logged = entry(&h);
+    assert_eq!(
+        (
+            logged.tool.as_str(),
+            logged.outcome,
+            logged.message.as_deref()
+        ),
+        ("reject_ticket", "error", Some(said.as_str()))
+    );
+    let moved = stored(&h, &review.id);
+    assert_eq!(
+        (moved.column, moved.blocked.as_deref()),
+        (Column::Doing, Some(NO_CLAUDE_BLOCK))
+    );
+    // Resumed: no longer blocked for what it was, blocked for this.
+    let (blocked, _) = staffed(&h, &p, "DEM-2", Column::Doing, 2);
+    h.core
+        .edit_ticket(&blocked.id, |x| {
+            x.blocked = Some("Interrompu".into());
+            Ok(())
+        })
+        .unwrap();
+    let said = refused(&c, "resume_ticket", json!({ "ticket": blocked.key })).await;
+    assert_eq!(said, unsent("DEM-2"));
+    assert_eq!(entry(&h).outcome, "error");
+    assert_eq!(
+        stored(&h, &blocked.id).blocked.as_deref(),
+        Some(NO_CLAUDE_BLOCK)
+    );
+    // Blocked for the very same reason as before: nothing moved, the failure is a refusal.
+    let (same, _) = staffed(&h, &p, "DEM-3", Column::Doing, 3);
+    h.core
+        .edit_ticket(&same.id, |x| {
+            x.blocked = Some(NO_CLAUDE_BLOCK.into());
+            Ok(())
+        })
+        .unwrap();
+    let same = stored(&h, &same.id);
+    let why = turned_down(
+        &h,
+        &c,
+        "resume_ticket",
+        json!({ "ticket": same.key }),
+        "refused",
+        &same,
+    )
+    .await;
+    assert_eq!(
+        why,
+        "Claude Code introuvable. Installe-le ou indique son chemin dans les réglages."
+    );
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_conflict_handed_over_whose_message_fails_says_so_and_the_ticket_is_blocked() {
+    let h = harness("mcp-act-resolve-unsent");
+    let (p, r) = h.project(false).await;
+    let (t, _) = conflicting(&h, &p.id, &r).await;
+    h.core.ticket_approve(&t.id).await.unwrap();
+    // Its process gone and Claude Code nowhere: the conflicts cannot be told to the agent.
+    let agent = t.agent_id.clone().unwrap();
+    if let Some(proc) = h.core.agent(&agent).unwrap().lock().detach() {
+        proc.kill();
+    }
+    h.lose_claude();
+    let c = external(&h).await;
+    let said = refused(&c, "resolve_conflict", json!({ "ticket": "dem-1" })).await;
+    assert_eq!(said, unsent("DEM-1"));
+    assert_eq!(entry(&h).outcome, "error");
+    let moved = stored(&h, &t.id);
+    assert_eq!(
+        (moved.column, moved.conflict, moved.blocked.as_deref()),
+        (Column::Doing, false, Some(NO_CLAUDE_BLOCK))
+    );
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_blocked_ticket_is_taken_up_by_its_agent() {
+    let h = harness("mcp-act-resume");
+    let (p, _) = h.project(false).await;
+    let t = h
+        .core
+        .ticket_create(&p.id, draft("Long travail [lent]", &[], 5))
+        .await
+        .unwrap();
+    let agent = wait_running(&h, &t.id).await;
+    h.core.interrupt(&agent).await.unwrap();
+    h.wait_ticket(&t.id, "the ticket to be blocked", |t| t.blocked.is_some())
+        .await;
+    assert_eq!(stored(&h, &t.id).blocked.as_deref(), Some("Interrompu"));
+    let c = external(&h).await;
+    let v = read(&c, "resume_ticket", json!({ "ticket": "dem-1" })).await;
+    let logged = entry(&h);
+    // Its since is the ticket as it was: in progress, blocked.
+    let before = before_of(&v);
+    assert_eq!(before["column"], json!("doing"));
+    assert!(before["blocked"].is_number(), "{before}");
+    // Taken up, it is no longer blocked: a second call is refused. Made at once: once its agent has
+    // ended its turn, the ticket is no longer in progress, and the refusal would be another.
+    let again = refused(&c, "resume_ticket", json!({ "ticket": "DEM-1" })).await;
+    assert_eq!(again, RESUME_NOT_BLOCKED);
+    assert_eq!(
+        (v["key"].as_str(), v["column"].as_str()),
+        (Some("DEM-1"), Some("doing"))
+    );
+    assert_eq!(stored(&h, &t.id).blocked, None);
+    assert_eq!(
+        (
+            logged.tool.as_str(),
+            logged.summary.as_str(),
+            logged.outcome
+        ),
+        ("resume_ticket", "ticket: dem-1", "ok")
+    );
+    // Its agent goes on where it was.
+    h.wait_sent(
+        &h.worktree_of(&t.id),
+        "Reprends le ticket DEM-1 là où tu en étais, puis termine par le bilan.",
+    )
+    .await;
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_blocked_ticket_whose_agent_is_gone_starts_again_even_with_the_autopilot_off() {
+    let h = harness("mcp-act-resume-gone");
+    let p = project(&h).await;
+    let t = made(&h, &p, "Repartir [ok]").await;
+    h.core
+        .edit_ticket(&t.id, |t| {
+            t.column = Column::Doing;
+            t.iteration = 2;
+            t.agent_id = Some("disparu".into());
+            t.blocked = Some("Interrompu".into());
+            Ok(())
+        })
+        .unwrap();
+    let c = external(&h).await;
+    read(&c, "resume_ticket", json!({ "ticket": t.key })).await;
+    assert_eq!(entry(&h).outcome, "ok");
+    h.wait_ticket(&t.id, "started again to test", |t| {
+        t.column == Column::Review
+    })
+    .await;
+    assert_ne!(stored(&h, &t.id).agent_id.as_deref(), Some("disparu"));
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_is_not_resumed_where_the_window_does_not_offer_it() {
+    use chrono::TimeZone;
+    let h = harness("mcp-act-resume-guards");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    let ask = |t: &Ticket| json!({ "ticket": t.key });
+    // Not in progress.
+    for (i, column) in [Column::Todo, Column::Review, Column::Done]
+        .into_iter()
+        .enumerate()
+    {
+        let t = put(
+            &h,
+            Ticket {
+                blocked: Some("Erreur".into()),
+                ..ticket(&p, &format!("DEM-{}", i + 1), "Ailleurs", column, 1)
+            },
+        );
+        let why = turned_down(&h, &c, "resume_ticket", ask(&t), "refused", &t).await;
+        assert_eq!(why, "Ce ticket n'est pas en cours.", "{column:?}");
+    }
+    // Not blocked: taken up already.
+    let (moving, _) = staffed(&h, &p, "DEM-4", Column::Doing, 4);
+    let why = turned_down(&h, &c, "resume_ticket", ask(&moving), "refused", &moving).await;
+    assert_eq!(why, RESUME_NOT_BLOCKED);
+    // Its agent waits for its quota: a message now would meet the limit again.
+    let (waiting, agent) = staffed(&h, &p, "DEM-5", Column::Doing, 5);
+    let at = chrono::Local
+        .with_ymd_and_hms(2026, 10, 3, 15, 7, 0)
+        .unwrap()
+        .timestamp_millis();
+    h.core.agent(&agent.id).unwrap().lock().meta.resume_at = Some(at);
+    h.core
+        .edit_ticket(&waiting.id, |x| {
+            x.blocked = Some("Interrompu".into());
+            Ok(())
+        })
+        .unwrap();
+    let waiting = stored(&h, &waiting.id);
+    let why = turned_down(&h, &c, "resume_ticket", ask(&waiting), "refused", &waiting).await;
+    assert_eq!(why, "En attente du quota — reprise à 15:07");
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_blocked_ticket_is_not_resumed_while_the_account_that_would_take_it_is_held_back() {
+    let h = harness("mcp-act-resume-accounts");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    let end = h.core.pause_now() + 3_600_000;
+    used_up(&h, PRINCIPAL, end);
+    let ask = |t: &Ticket| json!({ "ticket": t.key });
+    let held_for = |said: &str| {
+        said.contains("pause")
+            && said.contains("5 h")
+            && said.contains(&clock(end + RESUME_MARGIN_MS))
+    };
+    // Its agent is there: the message would spend its account's quota.
+    let (blocked, agent) = staffed(&h, &p, "DEM-1", Column::Doing, 1);
+    h.core
+        .edit_ticket(&blocked.id, |x| {
+            x.blocked = Some("Interrompu".into());
+            Ok(())
+        })
+        .unwrap();
+    let blocked = stored(&h, &blocked.id);
+    let why = turned_down(&h, &c, "resume_ticket", ask(&blocked), "refused", &blocked).await;
+    assert!(held_for(&why), "{why}");
+    assert_eq!(h.agent(&agent.id).prompts, 0);
+    // It is gone: a new agent would start on a held account.
+    let gone = put(&h, ticket(&p, "DEM-2", "Sans agent", Column::Doing, 2));
+    h.core
+        .edit_ticket(&gone.id, |x| {
+            x.agent_id = Some("disparu".into());
+            x.blocked = Some("Interrompu".into());
+            Ok(())
+        })
+        .unwrap();
+    let gone = stored(&h, &gone.id);
+    let why = turned_down(&h, &c, "resume_ticket", ask(&gone), "refused", &gone).await;
+    assert!(held_for(&why), "{why}");
+    // Not blocked: the window's own refusal is the one told, held or not.
+    let (moving, _) = staffed(&h, &p, "DEM-3", Column::Doing, 3);
+    let why = turned_down(&h, &c, "resume_ticket", ask(&moving), "refused", &moving).await;
+    assert_eq!(why, RESUME_NOT_BLOCKED);
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_conflict_is_handed_to_the_tickets_agent_which_gets_the_target_merged_into_its_branch() {
+    let h = harness("mcp-act-resolve");
+    let (p, r) = h.project(false).await;
+    let (t, wt) = conflicting(&h, &p.id, &r).await;
+    let agent = t.agent_id.clone();
+    // The approval stops on the conflict and asks what to do.
+    h.core.ticket_approve(&t.id).await.unwrap();
+    let stopped = stored(&h, &t.id);
+    assert_eq!(
+        (stopped.column, stopped.conflict, stopped.blocked.as_deref()),
+        (Column::Review, true, Some("Conflit avec main"))
+    );
+    let c = external(&h).await;
+    let v = read(&c, "resolve_conflict", json!({ "ticket": "dem-1" })).await;
+    assert_eq!(
+        (v["key"].as_str(), v["column"].as_str()),
+        (Some("DEM-1"), Some("doing"))
+    );
+    // Its since is the ticket as it was: in review, stopped on the conflict.
+    let before = before_of(&v);
+    assert_eq!(
+        (&before["column"], &before["conflict"]),
+        (&json!("review"), &json!(true))
+    );
+    let logged = entry(&h);
+    assert_eq!(
+        (
+            logged.tool.as_str(),
+            logged.summary.as_str(),
+            logged.outcome
+        ),
+        ("resolve_conflict", "ticket: dem-1", "ok")
+    );
+    // The target is merged into its branch, the conflicts left in the worktree for the agent.
+    h.wait_sent(
+        &wt,
+        "Le merge de main dans ta branche a des conflits sur : src/app.ts.",
+    )
+    .await;
+    assert!(git(&wt, &["diff", "--name-only", "--diff-filter=U"]).contains("src/app.ts"));
+    let handed = stored(&h, &t.id);
+    assert_eq!(
+        (
+            handed.agent_id,
+            handed.iteration,
+            handed.conflict,
+            handed.blocked,
+            handed.step
+        ),
+        (agent, 1, false, None, None)
+    );
+    // The project's folder was left as it was.
+    assert_eq!(git(&r, &["status", "--porcelain"]), "");
+    // Its agent answers with its report: to test again.
+    h.wait_ticket(&t.id, "to test again", |t| t.column == Column::Review)
+        .await;
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_conflict_is_not_handed_over_where_the_window_does_not_offer_it() {
+    let h = harness("mcp-act-resolve-guards");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    let ask = |t: &Ticket| json!({ "ticket": t.key });
+    // Not in « À tester », a conflict or not.
+    for (i, column) in [Column::Todo, Column::Doing, Column::Done]
+        .into_iter()
+        .enumerate()
+    {
+        let t = put(
+            &h,
+            Ticket {
+                conflict: true,
+                blocked: Some("Conflit avec main".into()),
+                ..ticket(&p, &format!("DEM-{}", i + 1), "Ailleurs", column, 1)
+            },
+        );
+        let why = turned_down(&h, &c, "resolve_conflict", ask(&t), "refused", &t).await;
+        assert_eq!(why, NOT_IN_REVIEW, "{column:?}");
+    }
+    // Its approval runs.
+    let (running, _) = staffed(&h, &p, "DEM-4", Column::Review, 4);
+    h.core
+        .edit_ticket(&running.id, |x| {
+            x.conflict = true;
+            Ok(())
+        })
+        .unwrap();
+    let running = approving(&h, &stored(&h, &running.id), "Merge…");
+    let why = turned_down(
+        &h,
+        &c,
+        "resolve_conflict",
+        ask(&running),
+        "refused",
+        &running,
+    )
+    .await;
+    assert_eq!(why, APPROVING);
+    // Blocked by something else than a conflict (a step that failed), or not blocked at all.
+    for (key, blocked) in [("DEM-5", Some("Tests en échec")), ("DEM-6", None)] {
+        let (t, _) = staffed(&h, &p, key, Column::Review, 5);
+        h.core
+            .edit_ticket(&t.id, |x| {
+                x.blocked = blocked.map(str::to_string);
+                Ok(())
+            })
+            .unwrap();
+        let t = stored(&h, &t.id);
+        let why = turned_down(&h, &c, "resolve_conflict", ask(&t), "refused", &t).await;
+        assert_eq!(why, "Ce ticket n’a pas de conflit à résoudre.", "{key}");
+    }
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_conflict_is_not_handed_over_while_its_agents_account_is_held_back_and_only_then() {
+    let h = harness("mcp-act-resolve-accounts");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    let end = h.core.pause_now() + 3_600_000;
+    used_up(&h, PRINCIPAL, end);
+    let ask = |t: &Ticket| json!({ "ticket": t.key });
+    let stopped_on_a_conflict = |key: &str, at: i64| {
+        let (t, agent) = staffed(&h, &p, key, Column::Review, at);
+        h.core
+            .edit_ticket(&t.id, |x| {
+                x.conflict = true;
+                x.blocked = Some("Conflit avec main".into());
+                Ok(())
+            })
+            .unwrap();
+        (stored(&h, &t.id), agent)
+    };
+    // The message to its agent would spend the held account's quota.
+    let (stopped, agent) = stopped_on_a_conflict("DEM-1", 1);
+    let why = turned_down(
+        &h,
+        &c,
+        "resolve_conflict",
+        ask(&stopped),
+        "refused",
+        &stopped,
+    )
+    .await;
+    assert!(
+        why.contains("pause")
+            && why.contains("5 h")
+            && why.contains(&clock(end + RESUME_MARGIN_MS)),
+        "{why}"
+    );
+    assert_eq!(h.agent(&agent.id).prompts, 0);
+    // Where the window would not go ahead, its own refusal is the one told.
+    let (running, _) = stopped_on_a_conflict("DEM-2", 2);
+    let running = approving(&h, &running, "Merge…");
+    let why = turned_down(
+        &h,
+        &c,
+        "resolve_conflict",
+        ask(&running),
+        "refused",
+        &running,
+    )
+    .await;
+    assert_eq!(why, APPROVING);
+    // Its agent works, on the held account all the same: the window says it first.
+    let (busy, worker) = stopped_on_a_conflict("DEM-3", 3);
+    {
+        let worker = h.core.agent(&worker.id).unwrap();
+        let mut rt = worker.lock();
+        rt.meta.status = AgentStatus::Running;
+        rt.meta.worktree = Some(Worktree {
+            path: h.dir.join("dem-3").to_string_lossy().into(),
+            branch: "ticket/dem-3".into(),
+            base_branch: "main".into(),
+            existing: false,
+        });
+    }
+    let why = turned_down(&h, &c, "resolve_conflict", ask(&busy), "refused", &busy).await;
+    assert_eq!(
+        why,
+        "L'agent de ce ticket travaille encore : attends la fin de son tour pour valider."
+    );
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn the_block_of_a_ticket_to_review_is_dismissed_and_the_ticket_stays_to_review() {
+    let h = harness("mcp-act-dismiss");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    // A conflict, and a step that failed.
+    for (key, blocked, conflict) in [
+        ("DEM-1", "Conflit avec main", true),
+        (
+            "DEM-2",
+            "Le dossier du projet a des modifications non commitées sur main",
+            false,
+        ),
+    ] {
+        let (t, _) = staffed(&h, &p, key, Column::Review, 1);
+        h.core
+            .edit_ticket(&t.id, |x| {
+                x.conflict = conflict;
+                x.blocked = Some(blocked.into());
+                Ok(())
+            })
+            .unwrap();
+        let before = stored(&h, &t.id);
+        let seen = ticket_events(&h, &t.id);
+        let v = read(&c, "dismiss_block", json!({ "ticket": key.to_lowercase() })).await;
+        assert_eq!(
+            (v["key"].as_str(), v["column"].as_str()),
+            (Some(key), Some("review"))
+        );
+        let logged = entry(&h);
+        assert_eq!(
+            (logged.tool.as_str(), logged.outcome),
+            ("dismiss_block", "ok")
+        );
+        assert_eq!(logged.summary, format!("ticket: {}", key.to_lowercase()));
+        // The block goes, nothing else changes; the window is told.
+        assert_eq!(
+            stored(&h, &t.id),
+            Ticket {
+                blocked: None,
+                conflict: false,
+                ..before
+            },
+            "{key}"
+        );
+        assert!(ticket_events(&h, &t.id) > seen, "{key}");
+        // The answer's since is the ticket as it was, blocked: a wait from it is told at once that
+        // the block went (and the conflict).
+        assert_eq!(before_of(&v)["conflict"], json!(conflict), "{key}");
+        let told = told_since(&c, key, &v["since"]).await;
+        let what = if conflict {
+            json!(["blocked", "conflict"])
+        } else {
+            json!(["blocked"])
+        };
+        assert_eq!(told["changes"][0]["what"], what, "{key}");
+        assert_eq!(
+            told["changes"][0]["before"]["blocked"],
+            json!(true),
+            "{key}"
+        );
+    }
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_block_is_not_dismissed_where_the_window_does_not_offer_it() {
+    let h = harness("mcp-act-dismiss-guards");
+    let p = project(&h).await;
+    let c = external(&h).await;
+    let ask = |t: &Ticket| json!({ "ticket": t.key });
+    // Not in « À tester »: the block of a ticket under way is the autopilot's, and an agent's.
+    for (i, column) in [Column::Todo, Column::Doing, Column::Done]
+        .into_iter()
+        .enumerate()
+    {
+        let t = put(
+            &h,
+            Ticket {
+                blocked: Some("Interrompu".into()),
+                ..ticket(&p, &format!("DEM-{}", i + 1), "Ailleurs", column, 1)
+            },
+        );
+        let why = turned_down(&h, &c, "dismiss_block", ask(&t), "refused", &t).await;
+        assert_eq!(why, NOT_IN_REVIEW, "{column:?}");
+    }
+    // Its approval runs: the block it may make is not yet there to dismiss.
+    let (running, _) = staffed(&h, &p, "DEM-4", Column::Review, 4);
+    let running = approving(&h, &running, "Tests…");
+    let why = turned_down(&h, &c, "dismiss_block", ask(&running), "refused", &running).await;
+    assert_eq!(why, APPROVING);
+    // Nothing blocks it.
+    let (free, _) = staffed(&h, &p, "DEM-5", Column::Review, 5);
+    let why = turned_down(&h, &c, "dismiss_block", ask(&free), "refused", &free).await;
+    assert_eq!(why, NOT_BLOCKED);
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_is_deleted_whatever_its_column_and_the_ones_after_it_no_longer_wait_for_it() {
+    let h = harness("mcp-act-delete");
+    let p = project(&h).await;
+    let first = made(&h, &p, "Premier").await;
+    let second = made_after(&h, &p, "Deuxième", &[&first]).await;
+    let c = external(&h).await;
+    let seen = ticket_events(&h, &second.id);
+    let v = read(&c, "delete_ticket", json!({ "ticket": "dem-1" })).await;
+    assert_eq!(
+        v,
+        json!({ "key": "DEM-1", "deleted": true, "agentArchived": false })
+    );
+    let logged = entry(&h);
+    assert_eq!(
+        (
+            logged.tool.as_str(),
+            logged.summary.as_str(),
+            logged.outcome
+        ),
+        ("delete_ticket", "ticket: dem-1", "ok")
+    );
+    // Gone for good, the window told, and the ticket that came after it no longer waits for it.
+    assert!(h.core.ticket(&first.id).is_err());
+    assert!(h.events.lock().iter().any(|e| e["type"] == "ticketRemoved"
+        && e["id"] == first.id.as_str()
+        && e["projectId"] == p.id.as_str()));
+    assert!(stored(&h, &second.id).after.is_empty());
+    assert!(ticket_events(&h, &second.id) > seen);
+    let again = refused(&c, "delete_ticket", json!({ "ticket": first.id })).await;
+    assert!(again.contains("Aucun ticket"), "{again}");
+
+    // One to review: its agent is archived (its worktree kept), and the answer says so.
+    let (review, agent) = staffed(&h, &p, "DEM-7", Column::Review, 7);
+    let v = read(&c, "delete_ticket", json!({ "ticket": review.key })).await;
+    assert_eq!(
+        v,
+        json!({ "key": "DEM-7", "deleted": true, "agentArchived": true })
+    );
+    assert!(h.core.ticket(&review.id).is_err());
+    assert!(h.agent(&agent.id).archived);
+    // One in progress, its agent at work: as the window deletes it.
+    let (doing, worker) = staffed(&h, &p, "DEM-8", Column::Doing, 8);
+    h.core.agent(&worker.id).unwrap().lock().meta.status = AgentStatus::Running;
+    let v = read(&c, "delete_ticket", json!({ "ticket": doing.key })).await;
+    assert_eq!(v["agentArchived"], true);
+    assert!(h.agent(&worker.id).archived);
+    // One done leaves its agent as it was: it is no longer the ticket's to archive.
+    let (done, finished) = staffed(&h, &p, "DEM-9", Column::Done, 9);
+    let v = read(&c, "delete_ticket", json!({ "ticket": done.key })).await;
+    assert_eq!(v["agentArchived"], false);
+    assert!(!h.agent(&finished.id).archived);
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_ticket_is_not_deleted_while_its_approval_runs() {
+    let h = harness("mcp-act-delete-approving");
+    let p = project(&h).await;
+    let (own, agent) = staffed(&h, &p, "DEM-1", Column::Review, 1);
+    let own = approving(&h, &own, "Merge…");
+    let c = external(&h).await;
+    let why = turned_down(
+        &h,
+        &c,
+        "delete_ticket",
+        json!({ "ticket": own.key }),
+        "refused",
+        &own,
+    )
+    .await;
+    assert_eq!(
+        why,
+        "La validation de ce ticket est en cours : attends sa fin pour le supprimer."
+    );
+    // An agent of the ticket is refused first: the ticket is not its to act on.
+    let a = as_agent(&h, &agent.id).await;
+    let why = turned_down(
+        &h,
+        &a,
+        "delete_ticket",
+        json!({ "ticket": own.key }),
+        "refused",
+        &own,
+    )
+    .await;
+    assert_eq!(why, OWN_TICKET);
+    // The approval over, it is deleted as any.
+    h.core
+        .edit_ticket(&own.id, |x| {
+            x.step = None;
+            Ok(())
+        })
+        .unwrap();
+    let v = read(&c, "delete_ticket", json!({ "ticket": own.key })).await;
+    assert_eq!(v["deleted"], json!(true));
+    assert!(h.core.ticket(&own.id).is_err());
+    a.cancel().await.unwrap();
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+// ---------- the Kanban's settings, and the model of a ticket ----------
+
+/// The board of `p`, as the core keeps it.
+fn board_of(h: &Harness, p: &Project) -> BoardSettings {
+    h.core.project(&p.id).unwrap().board
+}
+
+/// What the tools do not set, written as the core has it (the key's prefix and number, the test
+/// command, the user's own choice of mode).
+fn edit_board(h: &Harness, p: &Project, f: impl FnOnce(&mut BoardSettings)) {
+    let mut projects = h.core.projects.write();
+    f(&mut projects.iter_mut().find(|q| q.id == p.id).unwrap().board);
+}
+
+/// How many `project` events the window was sent for `p`.
+fn project_events(h: &Harness, p: &Project) -> usize {
+    h.events
+        .lock()
+        .iter()
+        .filter(|e| e["type"] == "project" && e["project"]["id"] == p.id.as_str())
+        .count()
+}
+
+/// The models the window offers: a model is checked against them.
+fn known_models(h: &Harness) {
+    *h.core.models.write() = ["sonnet", "opus", "haiku"]
+        .iter()
+        .map(|m| ModelInfo {
+            value: m.to_string(),
+            resolved_model: format!("claude-{m}-9"),
+        })
+        .collect();
+}
+
+#[tokio::test]
+async fn a_boards_settings_change_only_the_ones_given_and_the_core_and_the_window_follow() {
+    let h = harness("mcp-act-set-board");
+    let p = project(&h).await;
+    git(&h.dir.join("repo"), &["branch", "develop"]);
+    known_models(&h);
+    edit_board(&h, &p, |b| {
+        b.prefix = "DEM".into();
+        b.next_number = 7;
+        b.target = "main".into();
+        b.test_command = "npm test".into();
+    });
+    let c = external(&h).await;
+    let before = board_of(&h, &p);
+    let seen = project_events(&h, &p);
+
+    let v = read(
+        &c,
+        "set_board",
+        json!({
+            "project": "demo", "action": "pr", "strategy": "squash", "draft": true,
+            "model": "opus", "effort": "max",
+        }),
+    )
+    .await;
+    // The others are what they were: the prefix and the number, the target, the test command.
+    let after = BoardSettings {
+        action: "pr".into(),
+        draft: true,
+        model: "opus".into(),
+        effort: "max".into(),
+        ..before.clone()
+    };
+    assert_eq!(board_of(&h, &p), after);
+    // The answer is `get_board`'s, after the change.
+    assert_eq!(
+        v,
+        json!({
+            "project": "demo",
+            "projectId": p.id,
+            "action": "pr",
+            "target": "main",
+            "strategy": "squash",
+            "draft": true,
+            "cleanup": true,
+            "conventional": true,
+            "conflict": "ask",
+            "maxParallel": 2,
+            "autopilot": false,
+            "model": "opus",
+            "effort": "max",
+            "mode": "",
+            "defaults": { "model": "sonnet", "effort": "medium", "mode": "auto" },
+            "testsFirst": false,
+            "testCommand": "npm test",
+            "prefix": "DEM",
+        })
+    );
+    let logged = entry(&h);
+    assert_eq!(read(&c, "get_board", json!({ "project": "demo" })).await, v);
+    // The window is told as it is for the settings it changes itself.
+    assert_eq!(project_events(&h, &p), seen + 1);
+    let told = h
+        .events
+        .lock()
+        .iter()
+        .rev()
+        .find(|e| e["type"] == "project" && e["project"]["id"] == p.id.as_str())
+        .cloned()
+        .unwrap();
+    assert_eq!(told["project"]["board"]["action"], "pr");
+    assert_eq!(told["project"]["board"]["draft"], true);
+    // The call is in the activity log with what it was given, and what it changed, each setting
+    // from its value to its new one: not the strategy, given as it was.
+    assert_eq!(
+        (
+            logged.caller.as_str(),
+            logged.tool.as_str(),
+            logged.outcome,
+            logged.summary.as_str(),
+            logged.message.as_deref()
+        ),
+        (
+            "Claude (hors Escouade)",
+            "set_board",
+            "ok",
+            "project: demo · action: pr · strategy: squash · draft: true · model: opus · effort: max",
+            Some("action: merge → pr · draft: false → true · model: (défaut) → opus · effort: (défaut) → max")
+        )
+    );
+
+    // Every setting at once, the target and the choices as the window has them; an empty model
+    // and effort are the app's.
+    let v = read(
+        &c,
+        "set_board",
+        json!({
+            "project": p.id, "action": "keep", "target": " develop ", "strategy": "rebase",
+            "draft": false, "cleanup": false, "conventional": false, "conflict": "agent",
+            "maxParallel": 6, "autopilot": true, "model": "", "effort": "", "mode": "plan",
+            "testsFirst": true,
+        }),
+    )
+    .await;
+    let everything = BoardSettings {
+        action: "keep".into(),
+        target: "develop".into(),
+        strategy: "rebase".into(),
+        draft: false,
+        cleanup: false,
+        conventional: false,
+        conflict: "agent".into(),
+        max_parallel: 6,
+        autopilot: true,
+        model: String::new(),
+        effort: String::new(),
+        mode: "plan".into(),
+        tests_first: true,
+        ..after
+    };
+    assert_eq!(board_of(&h, &p), everything);
+    assert_eq!(
+        (
+            &v["target"],
+            &v["maxParallel"],
+            &v["mode"],
+            &v["testsFirst"]
+        ),
+        (&json!("develop"), &json!(6), &json!("plan"), &json!(true))
+    );
+    let logged = entry(&h);
+    // Thirteen settings, each said from its value to its new one: more than a line's 300 characters.
+    let said = "action: pr → keep · target: main → develop · strategy: squash → rebase · draft: true → false · cleanup: true → false · conventional: true → false · conflict: ask → agent · maxParallel: 2 → 6 · autopilot: false → true · model: opus → (défaut) · effort: max → (défaut) · mode: (défaut) → plan · testsFirst: false → true";
+    assert!(said.chars().count() > 300);
+    assert_eq!(logged.message.as_deref(), Some(said));
+    let summary = logged.summary;
+    for given in [
+        "action: keep",
+        "target:  develop ",
+        "strategy: rebase",
+        "draft: false",
+        "cleanup: false",
+        "conventional: false",
+        "conflict: agent",
+        "maxParallel: 6",
+        "autopilot: true",
+        "model: ",
+        "effort: ",
+        "mode: plan",
+        "testsFirst: true",
+    ] {
+        assert!(summary.contains(given), "{given} not in {summary}");
+    }
+
+    // What `get_board` answers can be given back as it is: nothing changes, and the log says so.
+    let got = read(&c, "get_board", json!({ "project": "demo" })).await;
+    assert_eq!(read(&c, "set_board", got.clone()).await, got);
+    assert_eq!(board_of(&h, &p), everything);
+    let logged = entry(&h);
+    assert_eq!(
+        (logged.outcome, logged.message.as_deref()),
+        (
+            "ok",
+            Some("Aucun changement : le Kanban était déjà réglé ainsi.")
+        )
+    );
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_setting_that_does_not_fit_or_is_the_users_to_give_is_refused_with_the_reason_and_nothing_changes(
+) {
+    let h = harness("mcp-act-set-board-refused");
+    let p = project(&h).await;
+    git(&h.dir.join("repo"), &["branch", "develop"]);
+    known_models(&h);
+    edit_board(&h, &p, |b| {
+        b.prefix = "DEM".into();
+        b.next_number = 4;
+        b.target = "main".into();
+    });
+    let c = external(&h).await;
+    let before = board_of(&h, &p);
+    let seen = project_events(&h, &p);
+
+    // (What is asked, how the log says it ended, what the answer says.)
+    let cases: Vec<(Value, &str, Vec<&str>)> = vec![
+        // Nothing to change.
+        (
+            json!({ "project": "demo" }),
+            "error",
+            vec!["au moins un réglage"],
+        ),
+        // A model the app does not offer, or no model's name: the other settings given with it
+        // wait too.
+        (
+            json!({ "project": "demo", "draft": true, "model": "gpt" }),
+            "error",
+            vec!["gpt", "sonnet", "opus"],
+        ),
+        (
+            json!({ "project": "demo", "model": "--permission-mode" }),
+            "error",
+            vec!["--permission-mode"],
+        ),
+        (
+            json!({ "project": "demo", "draft": true, "effort": "ultra" }),
+            "error",
+            vec!["ultra", "low, medium, high, xhigh, max"],
+        ),
+        (
+            json!({ "project": "demo", "mode": "yolo" }),
+            "error",
+            vec!["yolo", "auto, default, plan, acceptEdits"],
+        ),
+        // No permission request at all is the user's decision, taken in the window.
+        (
+            json!({ "project": "demo", "mode": "bypassPermissions" }),
+            "refused",
+            vec!["bypassPermissions", "Réglages › Kanban"],
+        ),
+        (
+            json!({ "project": "demo", "target": "nope" }),
+            "error",
+            vec!["nope", "main", "develop"],
+        ),
+        (
+            json!({ "project": "demo", "target": "origin/main" }),
+            "error",
+            vec!["origin/main"],
+        ),
+        (
+            json!({ "project": "demo", "target": "  " }),
+            "error",
+            vec!["vide"],
+        ),
+        (
+            json!({ "project": "demo", "maxParallel": 0 }),
+            "error",
+            vec!["1", "6"],
+        ),
+        (
+            json!({ "project": "demo", "maxParallel": 7 }),
+            "error",
+            vec!["1", "6"],
+        ),
+        // The server runs no command: the test command is the user's, set in the window.
+        (
+            json!({ "project": "demo", "testsFirst": true }),
+            "refused",
+            vec!["commande de test", "Réglages › Kanban"],
+        ),
+    ];
+    for (args, outcome, says) in cases {
+        let said = refused(&c, "set_board", args.clone()).await;
+        for part in says {
+            assert!(said.contains(part), "{args}: {said}");
+        }
+        let logged = entry(&h);
+        assert_eq!(
+            (logged.tool.as_str(), logged.outcome),
+            ("set_board", outcome),
+            "{args}"
+        );
+        assert_eq!(logged.message.as_deref(), Some(said.as_str()), "{args}");
+        assert_eq!(board_of(&h, &p), before, "{args}");
+    }
+    assert_eq!(project_events(&h, &p), seen);
+    // A project that is none.
+    let none = refused(&c, "set_board", json!({ "project": "nope", "draft": true })).await;
+    assert!(none.contains("Aucun projet « nope »"), "{none}");
+
+    // The boundaries are in: one agent in parallel, six; the app's mode by an empty one; no tests
+    // first, with no command, is no change to refuse.
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "maxParallel": 1, "testsFirst": false, "mode": "" }),
+    )
+    .await;
+    assert_eq!((&v["maxParallel"], &v["mode"]), (&json!(1), &json!("")));
+    read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "maxParallel": 6 }),
+    )
+    .await;
+    assert_eq!(board_of(&h, &p).max_parallel, 6);
+    for effort in ["low", "medium", "high", "xhigh", "max"] {
+        let v = read(
+            &c,
+            "set_board",
+            json!({ "project": "demo", "effort": effort }),
+        )
+        .await;
+        assert_eq!(v["effort"], effort);
+    }
+    for mode in ["auto", "default", "plan", "acceptEdits"] {
+        let v = read(&c, "set_board", json!({ "project": "demo", "mode": mode })).await;
+        assert_eq!(v["mode"], mode);
+    }
+    // A model by the name the window offers, in any case, or by the name it stands for.
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "model": " OPUS " }),
+    )
+    .await;
+    assert_eq!(v["model"], "opus");
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "model": "claude-sonnet-9" }),
+    )
+    .await;
+    assert_eq!(v["model"], "claude-sonnet-9");
+    let v = read(&c, "set_board", json!({ "project": "demo", "model": "" })).await;
+    assert_eq!(v["model"], "");
+
+    // Bypassing the permissions is not given here, but a Kanban the user set to it keeps it, and
+    // can be taken off it.
+    edit_board(&h, &p, |b| b.mode = "bypassPermissions".into());
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "mode": "bypassPermissions", "draft": true }),
+    )
+    .await;
+    assert_eq!(
+        (&v["mode"], &v["draft"]),
+        (&json!("bypassPermissions"), &json!(true))
+    );
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "mode": "plan" }),
+    )
+    .await;
+    assert_eq!(v["mode"], "plan");
+    // Once off it, it is the user's again.
+    let again = refused(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "mode": "bypassPermissions" }),
+    )
+    .await;
+    assert!(again.contains("Réglages › Kanban"), "{again}");
+    assert_eq!(board_of(&h, &p).mode, "plan");
+
+    // The command is the user's; with one, tests first is a setting like the others, and the
+    // command stays what it is.
+    edit_board(&h, &p, |b| b.test_command = "npm test".into());
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "testsFirst": true }),
+    )
+    .await;
+    assert_eq!(
+        (&v["testsFirst"], &v["testCommand"]),
+        (&json!(true), &json!("npm test"))
+    );
+    let kept = board_of(&h, &p);
+    assert_eq!(
+        (kept.prefix.as_str(), kept.next_number, kept.target.as_str()),
+        ("DEM", 4, "main")
+    );
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+/// What `get_board` answers for `project`, given back to `set_board` as it is: accepted, answered
+/// the same, the Kanban as it was. Returns what `get_board` said.
+async fn board_taken_back(h: &Harness, c: &Client, p: &Project, project: &str) -> Value {
+    let before = board_of(h, p);
+    let got = read(c, "get_board", json!({ "project": project })).await;
+    let said = read(c, "set_board", got.clone()).await;
+    assert_eq!(said, got);
+    assert_eq!(board_of(h, p), before, "{got}");
+    got
+}
+
+#[tokio::test]
+async fn a_kanban_with_no_target_takes_back_the_branch_get_board_shows_and_leaves_none_on_a_detached_head(
+) {
+    let h = harness("mcp-act-back-target");
+    let p = project(&h).await;
+    let repo = h.dir.join("repo");
+    let c = external(&h).await;
+
+    // No target yet: the branch the project is on is shown, and kept off the Kanban.
+    let got = board_taken_back(&h, &c, &p, "demo").await;
+    assert_eq!(got["target"], "main");
+    assert_eq!(board_of(&h, &p).target, "");
+    // The same asked by hand, around with spaces.
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "target": " main " }),
+    )
+    .await;
+    assert_eq!(v["target"], "main");
+    assert_eq!(board_of(&h, &p).target, "");
+
+    // A detached HEAD: no branch to show, the target is empty, and giving it back is no refusal.
+    git(&repo, &["checkout", "-q", "--detach"]);
+    let got = board_taken_back(&h, &c, &p, "demo").await;
+    assert_eq!(got["target"], "");
+    let v = read(&c, "set_board", json!({ "project": "demo", "target": "" })).await;
+    assert_eq!(v["target"], "");
+    assert_eq!(board_of(&h, &p).target, "");
+    // Any other branch is checked all the same, and a real one is set.
+    let said = refused(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "target": "nope" }),
+    )
+    .await;
+    assert!(said.contains("nope") && said.contains("main"), "{said}");
+    assert_eq!(board_of(&h, &p).target, "");
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "target": "main" }),
+    )
+    .await;
+    assert_eq!(v["target"], "main");
+    assert_eq!(board_of(&h, &p).target, "main");
+    assert_eq!(
+        entry(&h).message.as_deref(),
+        Some("target: (aucune) → main")
+    );
+    // Once the Kanban has one, an empty target is a refusal again.
+    let said = refused(&c, "set_board", json!({ "project": "demo", "target": "" })).await;
+    assert!(said.contains("vide"), "{said}");
+
+    // A repository without a commit: its branch is shown, though git lists none.
+    let fresh = other_project(&h, "vide").await;
+    let got = board_taken_back(&h, &c, &fresh, "vide").await;
+    assert!(!got["target"].as_str().unwrap().is_empty(), "{got}");
+    assert_eq!(board_of(&h, &fresh).target, "");
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_kanban_stored_with_tests_first_and_no_test_command_is_read_off_and_taken_back_as_it_is()
+{
+    let h = harness("mcp-act-back-tests-first");
+    let p = project(&h).await;
+    edit_board(&h, &p, |b| {
+        b.target = "main".into();
+        b.tests_first = true;
+        b.test_command = "  ".into();
+    });
+    let c = external(&h).await;
+
+    // The window shows it off, the validation ignores it: so does get_board, and the Kanban is
+    // left as it is when that is given back.
+    let got = board_taken_back(&h, &c, &p, "demo").await;
+    assert_eq!(got["testsFirst"], false);
+    assert!(board_of(&h, &p).tests_first);
+    // Asked on: it is on already, nothing changes (the window shows it off all the same).
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "testsFirst": true }),
+    )
+    .await;
+    assert_eq!(v["testsFirst"], false);
+    assert!(board_of(&h, &p).tests_first);
+    // Asked off, as get_board shows it: it stays as it is too.
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "testsFirst": false, "draft": true }),
+    )
+    .await;
+    assert_eq!(
+        (&v["testsFirst"], &v["draft"]),
+        (&json!(false), &json!(true))
+    );
+    assert!(board_of(&h, &p).tests_first);
+
+    // Off for good it cannot be turned on with no command: the user's to give, in the window.
+    edit_board(&h, &p, |b| b.tests_first = false);
+    let before = board_of(&h, &p);
+    let said = refused(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "testsFirst": true }),
+    )
+    .await;
+    assert!(said.contains("commande de test"), "{said}");
+    assert_eq!(board_of(&h, &p), before);
+
+    // With a command it is what get_board says, and what is given back changes nothing.
+    edit_board(&h, &p, |b| {
+        b.tests_first = true;
+        b.test_command = "npm test".into();
+    });
+    let got = board_taken_back(&h, &c, &p, "demo").await;
+    assert_eq!(got["testsFirst"], true);
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "testsFirst": false }),
+    )
+    .await;
+    assert_eq!(v["testsFirst"], false);
+    assert!(!board_of(&h, &p).tests_first);
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_target_branch_deleted_since_is_taken_back_as_get_board_shows_it_and_no_other_missing_one_is_taken(
+) {
+    let h = harness("mcp-act-back-deleted-target");
+    let p = project(&h).await;
+    git(&h.dir.join("repo"), &["branch", "develop"]);
+    edit_board(&h, &p, |b| b.target = "gone".into());
+    let c = external(&h).await;
+
+    // It is not a local branch any more, but it is the Kanban's: shown, and given back as it is.
+    let got = board_taken_back(&h, &c, &p, "demo").await;
+    assert_eq!(got["target"], "gone");
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "target": "gone", "draft": true }),
+    )
+    .await;
+    assert_eq!((&v["target"], &v["draft"]), (&json!("gone"), &json!(true)));
+    assert_eq!(board_of(&h, &p).target, "gone");
+    // Another one that is missing stays a refusal, the Kanban's own is not touched.
+    let before = board_of(&h, &p);
+    let said = refused(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "target": "nope" }),
+    )
+    .await;
+    assert!(
+        said.contains("nope") && said.contains("main") && said.contains("develop"),
+        "{said}"
+    );
+    assert_eq!(board_of(&h, &p), before);
+    // A branch that exists replaces it.
+    let v = read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "target": "develop" }),
+    )
+    .await;
+    assert_eq!(v["target"], "develop");
+    assert_eq!(board_of(&h, &p).target, "develop");
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn an_agent_sets_the_board_of_its_own_project_alone_and_claude_outside_escouade_any() {
+    let h = harness("mcp-act-set-board-own");
+    let p = project(&h).await;
+    let other = other_project(&h, "autre").await;
+    let mine = put_agent(&h, &p, "mon-agent", 1);
+    let c = as_agent(&h, &mine.id).await;
+    let theirs_before = board_of(&h, &other);
+
+    let why = refused(
+        &c,
+        "set_board",
+        json!({ "project": "autre", "draft": true }),
+    )
+    .await;
+    assert!(
+        why.contains("mon-agent")
+            && why.contains("propre projet (demo)")
+            && why.contains("le projet autre"),
+        "{why}"
+    );
+    let logged = entry(&h);
+    assert_eq!(
+        (logged.caller.as_str(), logged.tool.as_str(), logged.outcome),
+        ("mon-agent", "set_board", "refused")
+    );
+    assert_eq!(board_of(&h, &other), theirs_before);
+    // It reads theirs all the same, and sets its own.
+    assert_eq!(
+        read(&c, "get_board", json!({ "project": "autre" })).await["draft"],
+        false
+    );
+    let v = read(&c, "set_board", json!({ "project": "demo", "draft": true })).await;
+    assert_eq!(v["draft"], true);
+    assert!(board_of(&h, &p).draft);
+    assert_eq!(entry(&h).caller, "mon-agent");
+    c.cancel().await.unwrap();
+
+    // Claude outside Escouade is the user's: it sets any project's.
+    let outside = external(&h).await;
+    let v = read(
+        &outside,
+        "set_board",
+        json!({ "project": "autre", "maxParallel": 3, "action": "push" }),
+    )
+    .await;
+    assert_eq!(
+        (&v["project"], &v["projectId"], &v["maxParallel"]),
+        (&json!("autre"), &json!(other.id), &json!(3))
+    );
+    let theirs = board_of(&h, &other);
+    assert_eq!((theirs.action.as_str(), theirs.max_parallel), ("push", 3));
+    // Not the other's.
+    assert_eq!(board_of(&h, &p).max_parallel, 2);
+    outside.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn a_call_that_changes_nothing_says_so_even_when_it_gives_the_values_the_kanban_has() {
+    let h = harness("mcp-act-set-board-same");
+    let p = project(&h).await;
+    edit_board(&h, &p, |b| b.target = "main".into());
+    let c = external(&h).await;
+    let before = board_of(&h, &p);
+    let v = read(
+        &c,
+        "set_board",
+        json!({
+            "project": "demo", "action": "merge", "target": "main", "draft": false,
+            "maxParallel": 2, "model": "", "mode": "",
+        }),
+    )
+    .await;
+    assert_eq!(v["action"], "merge");
+    assert_eq!(board_of(&h, &p), before);
+    let logged = entry(&h);
+    assert_eq!(
+        (logged.outcome, logged.message.as_deref()),
+        (
+            "ok",
+            Some("Aucun changement : le Kanban était déjà réglé ainsi.")
+        )
+    );
+    assert!(
+        logged.summary.contains("draft: false"),
+        "{}",
+        logged.summary
+    );
+    // One that changes something says that alone, whatever else it gave.
+    read(
+        &c,
+        "set_board",
+        json!({ "project": "demo", "action": "merge", "draft": true, "maxParallel": 2 }),
+    )
+    .await;
+    assert_eq!(entry(&h).message.as_deref(), Some("draft: false → true"));
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[test]
+fn what_a_set_board_changed_is_said_in_the_language_of_the_interface_each_setting_from_its_value_to_its_new_one(
+) {
+    use crate::i18n::check::french_in;
+    use crate::i18n::Lang::{En, Fr};
+    let before = BoardSettings {
+        model: "opus".into(),
+        test_command: "npm test".into(),
+        ..Default::default()
+    };
+    let after = BoardSettings {
+        target: "main".into(),
+        model: String::new(),
+        effort: "high".into(),
+        mode: "plan".into(),
+        tests_first: true,
+        ..before.clone()
+    };
+    let fr = board_changes(Fr, &before, &after);
+    let en = board_changes(En, &before, &after);
+    assert_eq!(
+        fr,
+        "target: (aucune) → main · model: opus → (défaut) · effort: (défaut) → high · mode: (défaut) → plan · testsFirst: false → true"
+    );
+    assert_eq!(
+        en,
+        "target: (none) → main · model: opus → (default) · effort: (default) → high · mode: (default) → plan · testsFirst: false → true"
+    );
+    assert_eq!(french_in(&en), None);
+    // Tests first with no command is off, as the window and get_board show it: nothing to say.
+    let stored = BoardSettings {
+        tests_first: true,
+        ..Default::default()
+    };
+    for lang in [Fr, En] {
+        let none = board_changes(lang, &stored, &BoardSettings::default());
+        assert_eq!(none, board_changes(lang, &stored, &stored));
+    }
+    assert_eq!(
+        board_changes(Fr, &stored, &stored),
+        "Aucun changement : le Kanban était déjà réglé ainsi."
+    );
+    assert_eq!(
+        board_changes(En, &stored, &stored),
+        "No change: the Kanban was already set so."
+    );
+    // The key's prefix and number are not settings of the tool: never said.
+    let numbered = BoardSettings {
+        prefix: "DEM".into(),
+        next_number: 9,
+        ..Default::default()
+    };
+    assert_eq!(
+        board_changes(En, &BoardSettings::default(), &numbered),
+        "No change: the Kanban was already set so."
+    );
+}
+
+#[test]
+fn the_refusals_of_set_board_are_written_in_the_language_of_the_interface() {
+    use crate::i18n::check::french_in;
+    use crate::i18n::Lang::{En, Fr};
+    // A Kanban with a target: an empty one is then a refusal.
+    let board = BoardSettings {
+        target: "main".into(),
+        ..Default::default()
+    };
+    let branches = ["main".to_string(), "develop".to_string()];
+    let said = |lang, args: Value| {
+        let a: SetBoardArgs = serde_json::from_value(args).unwrap();
+        match board_change(lang, &board, &branches, "main", &a, None) {
+            Err(ToolError::Refused(m)) => ("refused", m),
+            Err(ToolError::Failed(m)) => ("error", m),
+            Ok(_) => panic!("accepted"),
+        }
+    };
+    let cases = [
+        (json!({ "project": "p" }), "error"),
+        (json!({ "project": "p", "effort": "ultra" }), "error"),
+        (json!({ "project": "p", "mode": "yolo" }), "error"),
+        (
+            json!({ "project": "p", "mode": "bypassPermissions" }),
+            "refused",
+        ),
+        (json!({ "project": "p", "target": "nope" }), "error"),
+        (json!({ "project": "p", "target": " " }), "error"),
+        (json!({ "project": "p", "maxParallel": 9 }), "error"),
+        (json!({ "project": "p", "testsFirst": true }), "refused"),
+    ];
+    for (args, kind) in cases {
+        let (fr_kind, fr) = said(Fr, args.clone());
+        let (en_kind, en) = said(En, args.clone());
+        assert_eq!((fr_kind, en_kind), (kind, kind), "{args}");
+        assert_ne!(fr, en, "{args}");
+        assert_eq!(french_in(&en), None, "{args}: {en}");
+    }
+    assert_eq!(
+        said(En, json!({ "project": "p", "mode": "bypassPermissions" })).1,
+        "Running agents with no permission request at all is the user’s decision: set the mode bypassPermissions in the window (Settings › Kanban)."
+    );
+    assert_eq!(
+        said(En, json!({ "project": "p", "effort": "ultra" })).1,
+        "Unknown effort “ultra”. Efforts: low, medium, high, xhigh, max."
+    );
+    assert_eq!(
+        said(En, json!({ "project": "p", "target": "nope" })).1,
+        "“nope” is not a local branch of the project. Branches: main, develop."
+    );
+    assert_eq!(
+        said(En, json!({ "project": "p", "testsFirst": true })).1,
+        "The Kanban has no test command, and the server runs none: set it in the window (Settings › Kanban), then turn on “Re-run the tests first”."
+    );
+    // The most branches listed, for a repository that has hundreds.
+    let many: Vec<String> = (0..60).map(|i| format!("b{i}")).collect();
+    let a: SetBoardArgs =
+        serde_json::from_value(json!({ "project": "p", "target": "nope" })).unwrap();
+    let Err(ToolError::Failed(listed)) = board_change(En, &board, &many, "b0", &a, None) else {
+        panic!("accepted")
+    };
+    assert!(
+        listed.contains("b19") && !listed.contains("b20"),
+        "{listed}"
+    );
+    assert!(listed.contains("60"), "{listed}");
+}
+
+#[tokio::test]
+async fn a_ticket_is_launched_with_a_model_and_an_effort_of_its_own_and_the_answer_says_what_its_agent_goes_with(
+) {
+    let h = harness("mcp-act-start-model");
+    let p = project(&h).await;
+    known_models(&h);
+    let a = made(&h, &p, "Architecture [ok]").await;
+    let b = made(&h, &p, "Petit [ok]").await;
+    let third = made(&h, &p, "Moyen [ok]").await;
+    let c = external(&h).await;
+
+    // Refused before anything is written, or started: the ticket is as it was.
+    for (args, says) in [
+        (
+            json!({ "ticket": a.key, "model": "gpt" }),
+            vec!["gpt", "sonnet", "opus"],
+        ),
+        (
+            json!({ "ticket": a.key, "model": "opus", "effort": "ultra" }),
+            vec!["ultra", "low, medium, high, xhigh, max"],
+        ),
+        (json!({ "ticket": a.key, "effort": "huge" }), vec!["huge"]),
+    ] {
+        let said = refused(&c, "start_ticket", args.clone()).await;
+        for part in says {
+            assert!(said.contains(part), "{args}: {said}");
+        }
+        assert_eq!(entry(&h).outcome, "error", "{args}");
+        let t = stored(&h, &a.id);
+        assert_eq!(
+            (t.column, t.forced, t.model.as_str(), t.effort.as_str()),
+            (Column::Todo, false, "", ""),
+            "{args}"
+        );
+    }
+
+    // Its own, for this ticket alone: written on it, and answered.
+    let v = read(
+        &c,
+        "start_ticket",
+        json!({ "ticket": "dem-1", "model": " opus ", "effort": "max" }),
+    )
+    .await;
+    assert_eq!(
+        v,
+        json!({ "key": "DEM-1", "starting": true, "model": "opus", "effort": "max" })
+    );
+    let t = stored(&h, &a.id);
+    assert_eq!((t.model.as_str(), t.effort.as_str()), ("opus", "max"));
+    let logged = entry(&h);
+    assert_eq!(
+        (logged.tool.as_str(), logged.outcome),
+        ("start_ticket", "ok")
+    );
+    assert_eq!(
+        logged.summary,
+        "ticket: dem-1 · model:  opus  · effort: max"
+    );
+
+    // Without them nothing is written, and the answer says what its agent takes: the app's.
+    let v = read(&c, "start_ticket", json!({ "ticket": b.key })).await;
+    assert_eq!(
+        v,
+        json!({ "key": "DEM-2", "starting": true, "model": "sonnet", "effort": "medium" })
+    );
+    let t = stored(&h, &b.id);
+    assert_eq!((t.model.as_str(), t.effort.as_str()), ("", ""));
+    assert_eq!(entry(&h).summary, "ticket: DEM-2");
+
+    // Each goes with what it was told (the agent of a ticket is made when its turn comes).
+    for id in [&a.id, &b.id] {
+        h.wait("its agent to be made", |h| stored(h, id).agent_id.is_some())
+            .await;
+    }
+    let agent = |id: &str| h.agent(&stored(&h, id).agent_id.unwrap());
+    let (first, second) = (agent(&a.id), agent(&b.id));
+    assert_eq!(
+        (first.model.as_str(), first.effort.as_str()),
+        ("opus", "max")
+    );
+    assert_eq!(
+        (second.model.as_str(), second.effort.as_str()),
+        ("sonnet", "medium")
+    );
+
+    // The Kanban's comes before the app's, and a ticket's own before the Kanban's, each of the
+    // two apart.
+    h.core
+        .board_set(
+            &p.id,
+            BoardSettings {
+                model: "opus".into(),
+                effort: "high".into(),
+                max_parallel: 6,
+                ..board_of(&h, &p)
+            },
+        )
+        .unwrap();
+    let v = read(
+        &c,
+        "start_ticket",
+        json!({ "ticket": third.key, "model": "sonnet" }),
+    )
+    .await;
+    assert_eq!(
+        v,
+        json!({ "key": "DEM-3", "starting": true, "model": "sonnet", "effort": "high" })
+    );
+    let t = stored(&h, &third.id);
+    assert_eq!((t.model.as_str(), t.effort.as_str()), ("sonnet", ""));
+
+    h.wait("its agent to be made", |h| {
+        stored(h, &third.id).agent_id.is_some()
+    })
+    .await;
+    let last = agent(&third.id);
+    assert_eq!(
+        (last.model.as_str(), last.effort.as_str()),
+        ("sonnet", "high")
+    );
+    for id in [&a.id, &b.id, &third.id] {
+        h.wait("its turn to end", |h| {
+            stored(h, id).column == Column::Review
+        })
+        .await;
+    }
+    c.cancel().await.unwrap();
+    h.core.mcp.stop();
+}
+
+#[tokio::test]
+async fn the_answer_of_start_ticket_has_no_effort_when_the_model_of_its_agent_takes_none() {
+    let h = harness("mcp-act-start-haiku");
+    let p = project(&h).await;
+    known_models(&h);
+    let a = made(&h, &p, "Petit [ok]").await;
+    let b = made(&h, &p, "Autre [ok]").await;
+    let c = external(&h).await;
+
+    // Haiku takes no effort: given or not, it is not the agent's, and the answer leaves it out.
+    let v = read(
+        &c,
+        "start_ticket",
+        json!({ "ticket": a.key, "model": "haiku", "effort": "high" }),
+    )
+    .await;
+    assert_eq!(
+        v,
+        json!({ "key": "DEM-1", "starting": true, "model": "haiku" })
+    );
+    // The same for a Kanban on haiku, with a ticket that says nothing of its own.
+    h.core
+        .board_set(
+            &p.id,
+            BoardSettings {
+                model: "haiku".into(),
+                effort: "low".into(),
+                ..board_of(&h, &p)
+            },
+        )
+        .unwrap();
+    let v = read(&c, "start_ticket", json!({ "ticket": b.key })).await;
+    assert_eq!(
+        v,
+        json!({ "key": "DEM-2", "starting": true, "model": "haiku" })
+    );
+    for id in [&a.id, &b.id] {
+        h.wait("its turn to end", |h| {
+            stored(h, id).column == Column::Review
+        })
+        .await;
+    }
     c.cancel().await.unwrap();
     h.core.mcp.stop();
 }

@@ -13,10 +13,15 @@ pub(crate) mod activity;
 #[cfg(test)]
 mod agents_tests;
 mod http;
+mod images;
+#[cfg(test)]
+mod images_tests;
 pub(crate) mod install;
 #[cfg(test)]
 mod install_tests;
 mod read;
+#[cfg(test)]
+mod remote_tests;
 #[cfg(test)]
 mod requests_tests;
 mod resolve;
@@ -25,6 +30,7 @@ mod tests;
 pub(crate) mod tools;
 #[cfg(test)]
 mod tools_tests;
+mod wait;
 
 // The one line a text is shown as (also the plan's titles).
 pub(crate) use act::visible_line;

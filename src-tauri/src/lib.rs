@@ -8,6 +8,9 @@ mod board;
 mod branches_tests;
 mod claude;
 mod clipboard;
+mod closed;
+#[cfg(test)]
+mod closed_tests;
 mod commands;
 mod conv;
 mod convsearch;
@@ -25,6 +28,7 @@ mod job;
 mod mcp;
 mod menus;
 mod model;
+mod navigation;
 mod notify;
 mod paths;
 mod plan;
@@ -45,6 +49,7 @@ mod shellenv;
 mod stats;
 mod telemetry;
 mod testlaunch;
+mod ticketimages;
 mod tickets;
 #[cfg(test)]
 mod tickets_tests;
@@ -63,7 +68,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WindowEvent};
+use tauri::{Manager, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 
 struct FileLogger {
@@ -125,6 +130,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => notify::show_main(app),
+            "reload" => navigation::reload(app),
             "quit" => {
                 let core = app.state::<Arc<Core>>();
                 if core.ask_before_quit() {
@@ -149,6 +155,34 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;
+    Ok(())
+}
+
+/// The main window, made from the config's (`create: false` there: the guard of `navigation` can
+/// only be put on it as it is made), hidden until `setup` (in `run`) shows it.
+fn build_window(app: &tauri::App) -> tauri::Result<()> {
+    let config = app.config();
+    let window = config
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .ok_or(tauri::Error::WindowNotFound)?;
+    // Only the dev server's address is the app's besides its own.
+    let dev = if tauri::is_dev() {
+        config.build.dev_url.clone()
+    } else {
+        None
+    };
+    app.manage(navigation::Home {
+        url: navigation::home(dev.as_ref(), window.use_https_scheme),
+        dev: dev.clone(),
+    });
+    navigation::guard(
+        WebviewWindowBuilder::from_config(app.handle(), window)?,
+        dev,
+    )
+    .build()?;
     Ok(())
 }
 
@@ -188,6 +222,8 @@ pub fn run() {
     builder
         .setup(move |app| {
             init_logging();
+            // First: nothing below may find the window missing.
+            build_window(app)?;
             for note in paths::take_migration_notes() {
                 log::info!("migration: {note}");
             }
@@ -266,6 +302,8 @@ pub fn run() {
             commands::update_project,
             commands::reorder_projects,
             commands::remove_project,
+            commands::closed_projects,
+            commands::erase_closed_project,
             commands::create_agent,
             commands::warm_agent,
             commands::restart_agent_process,
@@ -274,6 +312,9 @@ pub fn run() {
             commands::send_message,
             commands::clipboard_image,
             commands::interrupt,
+            commands::stop_subagent,
+            commands::subagent_transcript,
+            commands::message_subagent,
             commands::answer_question,
             commands::answer_permission,
             commands::set_agent_options,
@@ -327,12 +368,14 @@ pub fn run() {
             commands::term_write,
             commands::term_resize,
             commands::term_kill,
+            commands::term_report,
             commands::play_chime,
             commands::quit_app,
             commands::set_unsaved,
             commands::ticket_create,
             commands::ticket_update,
             commands::ticket_delete,
+            commands::ticket_images,
             commands::ticket_prioritize,
             commands::ticket_start,
             commands::ticket_resume,

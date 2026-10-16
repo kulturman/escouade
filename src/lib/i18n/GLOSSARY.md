@@ -134,7 +134,8 @@ Chaque tâche ajoute ses mots **dans sa section** (en bas), pour que les tâches
 | Système (Français) | System (French) | la langue du système, nommée dans celle de l’interface |
 | Comme l’interface | Same as the interface | |
 | Français, English | Français, English | une langue proposée est écrite dans elle-même (`LANG_NAMES`) |
-| Afficher / Quitter | Show / Quit | menu de l’icône de la barre des tâches |
+| Afficher / Recharger l’interface / Quitter | Show / Reload the interface / Quit | menu de l’icône de la barre des tâches |
+| Recharger / Annuler | Reload / Cancel | les deux boutons du dialogue natif qui demande avant de recharger l’interface, quand des fichiers de l’éditeur ne sont pas enregistrés |
 | agent en attente | agent waiting | infobulle de l’icône |
 | À propos d’Escouade, Masquer Escouade, Masquer les autres, Tout afficher, Quitter Escouade | About Escouade, Hide Escouade, Hide Others, Show All, Quit Escouade | menu de l’app sous macOS : les mots et les majuscules de macOS |
 | Édition : Annuler, Rétablir, Couper, Copier, Coller, Tout sélectionner | Edit: Undo, Redo, Cut, Copy, Paste, Select All | idem |
@@ -221,6 +222,7 @@ Chaque tâche ajoute ses mots **dans sa section** (en bas), pour que les tâches
 | Boucles max | Max loops | |
 | Critères d’acceptation | Acceptance criteria | le formulaire d’un ticket |
 | Objectif partiel | Partial goal | |
+| Modèle de ce ticket : Opus, effort Max (avant celui du Kanban) | This ticket’s model: Opus, effort Max (over the Kanban’s) | l’étiquette d’une carte dont le ticket a son propre modèle ou effort (donnés par `start_ticket` du serveur MCP), à côté de sa clé : « Opus · Max » |
 | Ce qui a été fait | What was done | |
 | Avancement | Progress | |
 | Resynchroniser | Resync | ticket importé |
@@ -251,9 +253,11 @@ Chaque tâche ajoute ses mots **dans sa section** (en bas), pour que les tâches
 | Archiver / Restaurer / Archivés | Archive / Restore / Archived | un agent |
 | Dupliquer la conversation | Duplicate the conversation | menu d’un agent |
 | remote control | remote control | écrit en minuscules, comme dans la conversation |
+| activé à la main / par le réglage du projet / par le réglage de tous les agents | turned on by hand / by the project’s setting / by the setting for all agents | d’où vient le remote control d’un agent, à la fin de l’infobulle de son icône ; « Remote control pour tous les agents » → “Remote control for all agents”, « … pour les agents de ce projet » → “… for this project’s agents” (réglages) |
 | Terminaux / terminal terminé | Terminals / exited | un terminal dont le shell s’est arrêté |
 | À voir (un agent à regarder) | Needs a look | l’info-bulle d’un onglet de projet qui clignote |
 | Réduire / Agrandir / Restaurer (la fenêtre) | Minimize / Maximize / Restore | boutons de la barre de titre |
+| Dans le worktree de… | In the worktree of… | entrée du menu du + des Terminaux : ouvre la liste des agents du projet qui ont un worktree, pour y ouvrir un terminal |
 
 ## L8 — conv, composer
 
@@ -270,6 +274,7 @@ Chaque tâche ajoute ses mots **dans sa section** (en bas), pour que les tâches
 | Préparer le lancement | Prepare launch | |
 | Disposition | Layout | classique / côte à côte → classic / side by side |
 | archivé | archived | |
+| Terminal | Terminal | bouton de l’en-tête d’un agent à worktree : ouvre un terminal dans son worktree |
 
 ## L9 — runs, shell
 
@@ -398,7 +403,7 @@ Ce qu’Escouade dit à Claude ou lui fait écrire suit « Langue des textes ré
 | journal d’activité | activity log | ce que le serveur MCP a reçu et répondu |
 | requête refusée | request refused | « Requête refusée : jeton inconnu » → “Request refused: unknown token” |
 | en-tête (HTTP) | (HTTP) header | « en-tête Host », “Host header” |
-| Escouade · Créer un ticket | Escouade · Create a ticket | badge d’un outil du serveur d’Escouade : « Lister les projets / agents / tickets » → “List the projects / agents / tickets”, « Lire un ticket / le quota » → “Read a ticket / the quota”, « Résumer un agent » → “Sum up an agent”, « Modifier / Déplacer un ticket » → “Edit / Move a ticket”, « Lancer un ticket / un agent » → “Start a ticket / an agent”, « Envoyer un message » → “Send a message”, « Arrêter un agent » → “Stop an agent”, « Lister les demandes en attente » → “List the waiting requests”, « Répondre à une demande d’autorisation / une question » → “Answer a permission request / a question”, « Donner son avancement » → “Report progress”, « Découper son ticket » → “Split its ticket” |
+| Escouade · Créer un ticket | Escouade · Create a ticket | badge d’un outil du serveur d’Escouade : « Lister les projets / agents / tickets » → “List the projects / agents / tickets”, « Lire un ticket / le quota / les réglages du Kanban » → “Read a ticket / the quota / the Kanban settings”, « Régler le Kanban » → “Set the Kanban”, « Résumer un agent » → “Sum up an agent”, « Modifier / Déplacer un ticket » → “Edit / Move a ticket”, « Lancer un ticket / un agent » → “Start a ticket / an agent”, « Envoyer un message » → “Send a message”, « Arrêter un agent » → “Stop an agent”, « Lister les demandes en attente » → “List the waiting requests”, « Répondre à une demande d’autorisation / une question » → “Answer a permission request / a question”, « Donner son avancement » → “Report progress”, « Découper son ticket » → “Split its ticket” |
 | ligne d’état (d’un agent) | status line | ce qu’un agent annonce faire par `report_progress`, sous son nom et sur la carte de son ticket : « Ce que l’agent dit faire » → “What the agent says it is doing” |
 | le pilote auto est en pause jusqu’à 14:30 | the autopilot is paused until 14:30 | refus d’un outil du serveur MCP : « 2026-10-12 14:30 » un autre jour (une heure ou une date, pas une durée) |
 | le maximum de tickets en parallèle / d’agents qui travaillent en même temps | the most tickets in parallel / agents working at once | réglage « En parallèle » → “In parallel” |
@@ -445,6 +450,40 @@ Ce qu’Escouade dit à Claude ou lui fait écrire suit « Langue des textes ré
 | En attente de ta réponse | Waiting for your answer | une tâche bloquée : l’agent a posé une question ou demande une autorisation |
 | après 03, 05 | after 03, 05 | les rangs des tâches qu’une tâche à faire attend |
 | étapes (d’une tâche) | steps | « 2/3 étapes » → “2/3 steps” : les cases cochées du plan |
+
+## H — historique des projets fermés (ESC-89)
+
+| Français | Anglais | Note |
+|---|---|---|
+| projet fermé | closed project | un projet retiré de l’app dont l’historique est gardé |
+| historique (d’un projet) | history | ses conversations, ses tickets et ses réglages ; « Historique » (onglet de l’éditeur) reste History |
+| Historique retrouvé | History found | la fenêtre d’ajout, quand le dossier est celui d’un projet fermé |
+| Partir d’un projet vierge | Start from a blank project | l’historique reste là, le projet est un nouveau |
+| Rouvrir le projet | Reopen project | le bouton de la fenêtre d’ajout quand l’historique revient |
+| Effacer l’historique | Erase history | pour de bon ; « Supprimer » reste pour un fichier, un agent, un ticket |
+| dernière activité | last activity | |
+| Rouvrir | Reopen | la ligne d’un projet fermé (Réglages › Projets) : ouvre la fenêtre d’ajout sur son dossier et sur cet historique-là |
+| Historique illisible | Unreadable history | un fichier de projet fermé que l’app ne sait pas lire : seul « Effacer » (“Erase”) est proposé |
+| {nom} (fermé) | {name} (closed) | un projet fermé auquel un compte reste réservé (Réglages › Comptes Claude) |
+
+## S — sous-agents
+
+La liste sous la carte d’un agent et la conversation de chaque sous-agent (`subagents`). Les titres, consignes et rapports des sous-agents sont les mots de l’agent : jamais traduits.
+
+| Français | Anglais | Note |
+|---|---|---|
+| Sous-agents de <agent> | Subagents of <agent> | le groupe sous la carte d’un agent : « Sous-agents de agent-2 » → “Subagents of agent-2” (son nom pour un lecteur d’écran ; le titre visible est « Sous-agents » → “Subagents”) |
+| N en cours / N finis | N running / N finished | les comptes du groupe ; « 3 sous-agents finis » → “3 finished subagents” |
+| N autres en cours / N de plus / Réduire | N more running / N more / Show fewer | ce qui reste d’une liste de sous-agents (5 en cours, 10 finis), et le bouton qui la replie |
+| Lancé / En cours / Terminé / Échoué / Arrêté / Interrompu | Launched / Running / Done / Failed / Stopped / Interrupted | l’état d’un sous-agent ; « Lancé » : lancé en arrière-plan, rien d’autre n’en est connu |
+| consigne (d’un sous-agent) | prompt | ce qu’on lui a demandé (le `prompt` de son appel) : « Voir toute la consigne » → “Show the whole prompt” ; « consignes » (données à Claude) reste “instructions” |
+| Rapport | Report | ce qu’un sous-agent rend à l’agent à la fin ; « Ce sous-agent n’a pas rendu de rapport. » → “This subagent handed back no report.” |
+| Fil d’Ariane | Breadcrumb | « agent › sous-agent », en haut de la conversation d’un sous-agent |
+| Arrêter (un sous-agent) | Stop | arrête ce sous-agent seul ; l’infobulle dit pourquoi il est grisé |
+| Lui écrire, par <agent> | Write to it, through <agent> | le champ qui envoie un message à l’agent, pour qu’il le transmette au sous-agent ; « Envoyer à agent-2 » → “Send to agent-2” |
+| Ouvrir sa conversation | Open its conversation | le bouton au-dessus d’une demande d’un sous-agent, et le bouton ↗ de la ligne de son appel (« Ouvrir la conversation du sous-agent … » → “Open the conversation of the subagent …”) |
+| Ouvrir la conversation d’un sous-agent | Open the conversation of a subagent | le bouton de la pile de points du bandeau « Plan » quand plusieurs sous-agents tournent (il ouvre un menu pour choisir lequel) ; avec un seul, il porte le nom de ce sous-agent (« Ouvrir la conversation du sous-agent … ») |
+| Demande du sous-agent « nom » | Request of the subagent “name” | la ligne au-dessus d’une question ou d’une autorisation qu’un sous-agent a posée |
 
 ## V — voice
 

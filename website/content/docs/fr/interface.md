@@ -50,7 +50,7 @@ L’infobulle d’un onglet donne aussi le chemin du dossier du projet.
 | « Activer le worktree par agent » ou « Désactiver le worktree par agent » | Bascule l’option pour les nouveaux agents du projet. Voir les [worktrees](worktrees). |
 | « Réglages du projet… » | Ouvre les réglages, onglet Projets, sur ce projet. |
 | « Ouvrir le dossier » | Ouvre le dossier du projet dans le gestionnaire de fichiers du système. |
-| « Fermer le projet… » | Retire le projet et ses agents de l’application, conversations comprises, après confirmation. Les fichiers et les worktrees sur le disque ne sont pas touchés. |
+| « Fermer le projet… » | Retire le projet de l’application après confirmation : ses agents, ses terminaux et ses lancements s’arrêtent. Son historique (conversations, tickets, réglages) est gardé, et ajouter un projet dans le même dossier le retrouve ; une case de la confirmation permet de l’effacer aussi. Les fichiers et les worktrees sur le disque ne sont pas touchés. Voir [Réglages : Projets](settings-projects#projets-fermes). |
 
 ### Les boutons de la barre
 
@@ -70,7 +70,7 @@ L’en-tête « Agents » porte le nombre d’agents du projet et le bouton «
 
 Chaque agent est une carte :
 
-- son **nom** (double-clic pour le renommer sur place : `Entrée` valide, `Échap` annule), une icône d’ondes quand le [remote control](remote-control) est activé (bleue une fois connecté), et son **statut** ;
+- son **nom** (double-clic pour le renommer sur place : `Entrée` valide, `Échap` annule), une icône d’ondes quand le [remote control](remote-control) est activé (bleue une fois connecté ; son infobulle dit d’où il vient : de toi, du réglage du projet ou du réglage de tous les agents ; en [vue Claude Code](claude-code-view), elle dit l’état de l’interface), et son **statut** ;
 - ce que l’agent annonce faire, quand il l’a dit par le [serveur MCP](mcp) ;
 - son **modèle**, le temps pendant lequel il a travaillé et, s’il a un worktree, sa branche (`⎇ …`) ;
 - ses **tokens**, son **coût** (précédé de « ≈ » tant qu’un tour tourne : c’est alors une estimation) et le nombre de ses fichiers modifiés (« N fich. ») ;
@@ -107,7 +107,7 @@ Un clic droit sur une carte ouvre son menu :
 | « Ouvrir dans l’éditeur » | Ouvre l’éditeur sur son worktree, sinon sur le dossier du projet. |
 | « Ouvrir un terminal » | Ouvre un terminal dans son worktree, sinon dans le dossier du projet. |
 | « Vue Claude Code » ou « Vue Escouade » | Change de vue, comme le bouton de l’en-tête de sa conversation. Absente pour un agent de ticket et pour un agent archivé. Voir [la vue Claude Code](claude-code-view). |
-| « Activer le remote control » ou « Désactiver le remote control » | Rend la session accessible depuis claude.ai et l’app Claude (« claude.ai, mobile »). Quand le lien est disponible, « Ouvrir sur claude.ai » et « Copier le lien claude.ai » apparaissent. Absente en [vue Claude Code](claude-code-view), où c’est la commande `/remote-control` de Claude Code qui le fait. |
+| « Activer le remote control » ou « Désactiver le remote control » | Rend la session accessible depuis claude.ai et l’app Claude (« claude.ai, mobile »). Quand le lien est disponible, « Ouvrir sur claude.ai » et « Copier le lien claude.ai » apparaissent. « Désactiver » met toujours l’agent à part : un réglage allumé ensuite ne lui rend pas le remote control. En [vue Claude Code](claude-code-view), « Ouvrir sur claude.ai » et « Copier le lien claude.ai » n’apparaissent qu’une fois l’interface connectée, et le changement vaut au prochain lancement de l’interface. |
 | « Supprimer… » | Arrête le processus Claude et retire la conversation de l’application ; la session Claude Code reste sur le disque. Pour un agent avec un worktree, une case propose de supprimer aussi le worktree, et sa branche si elle a été créée pour l’agent. |
 
 Les agents archivés sont sous « Archivés (N) », un titre que tu déplies d’un clic ; leur carte ne montre que le nom et le coût.
@@ -118,7 +118,7 @@ La section « Lancement » liste les commandes de lancement du projet (serveur
 
 ### Terminaux
 
-La section « Terminaux » liste les terminaux ouverts du projet. Le bouton `+` (« Nouveau terminal ») propose les shells détectés sur la machine, et `Ctrl+T` en ouvre un tout de suite. Un clic sur un terminal l’affiche dans la zone principale, le × le ferme, et un terminal dont le shell s’est arrêté est marqué « terminé ». Voir [les terminaux](terminals).
+La section « Terminaux » liste les terminaux ouverts du projet. Le bouton `+` (« Nouveau terminal ») propose les shells détectés sur la machine, puis « Dans le worktree de… », qui liste les agents du projet ayant un worktree (pas les archivés) pour y ouvrir un terminal ; l’entrée n’existe pas quand aucun agent n’en a. `Ctrl+T` en ouvre un tout de suite. Un clic sur un terminal l’affiche dans la zone principale, le × le ferme, et un terminal dont le shell s’est arrêté est marqué « terminé ». Voir [les terminaux](terminals).
 
 ### Le pied de la barre
 
@@ -135,6 +135,7 @@ L’en-tête de la conversation d’un agent montre, de gauche à droite :
 | Nom et statut | Le nom de l’agent (double-clic pour le renommer) et son statut. |
 | `projet / branche` | Le projet, et la branche de l’agent s’il a un worktree, sinon celle du dossier du projet. |
 | « Éditeur » | Ouvre l’éditeur sur les fichiers de l’agent. |
+| « Terminal » | Pour un agent dans un worktree (pas archivé) : ouvre un [terminal](terminals) dans ce worktree. |
 | « ▶ Tester » ou « Préparer le lancement » | Pour un agent dans un worktree : lancer son travail pour l’essayer, ou demander à l’agent comment le lancer. Voir [tester et valider](testing). |
 | « Vue Claude Code » ou « Vue Escouade » | Fait tourner l’agent dans l’interface de Claude Code elle-même, ou le ramène dans la conversation d’Escouade. Absent pour un agent de ticket. Voir [la vue Claude Code](claude-code-view). |
 | Le modèle | Le modèle de l’agent, avec sa version. |

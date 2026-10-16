@@ -14,6 +14,7 @@ use crate::isola;
 use crate::model::*;
 use crate::telemetry::Event;
 use crate::testlaunch;
+use crate::ticketimages;
 use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -36,6 +37,13 @@ pub(crate) fn quota_lost(lang: Lang) -> String {
 /// an agent's.
 pub(crate) fn error_reason(e: &anyhow::Error) -> String {
     board::error_blocked(i18n::ui(), &error_line(e))
+}
+
+/// The folder of a ticket and its images go, off the async workers.
+async fn remove_images(dir: PathBuf) {
+    if let Err(e) = tokio::task::spawn_blocking(move || ticketimages::remove(&dir)).await {
+        log::warn!("ticket images: not removed: {e}");
+    }
 }
 
 /// The refusals of a ticket's validation and of an agent's test launch, as the window shows them
@@ -64,6 +72,9 @@ pub enum Refusal {
     NotInReview,
     /// A second « Valider » (or « Renvoyer », « L'agent résout ») while the first runs.
     ApprovingAlready,
+    /// No validation starts on a project that is being closed: closing waits for none, and cuts
+    /// what it finds under way.
+    ProjectClosing,
     NoAgent,
     AgentWithoutWorktree,
 }
@@ -121,6 +132,11 @@ impl Refusal {
                 "La validation de ce ticket est déjà en cours.",
                 "This ticket is already being approved."
             ),
+            Refusal::ProjectClosing => tr_in!(
+                lang,
+                "Le projet de ce ticket est en cours de fermeture : la validation ne peut pas démarrer.",
+                "This ticket’s project is being closed: the approval can’t start."
+            ),
             Refusal::NoAgent => tr_in!(lang, "Ce ticket n'a pas d'agent.", "This ticket has no agent."),
             Refusal::AgentWithoutWorktree => tr_in!(
                 lang,
@@ -161,6 +177,31 @@ fn archived_holds(lang: Lang, agent: &str, branch: &str) -> String {
     )
 }
 
+/// The model, the effort and the permission mode a ticket's agent goes with. The model and the
+/// effort: its ticket's own (`start_ticket` gave it one), else its board's, else the app's
+/// defaults. The mode: its board's, else the app's, but `default` instead of `auto` for a model that
+/// has no auto mode (the Composer does not offer it either): the one place that rule applies.
+pub(crate) fn ticket_agent_options(
+    t: &Ticket,
+    board: &BoardSettings,
+    settings: &Settings,
+) -> (String, String, String) {
+    let first = |own: &str, board: &str, app: &str| {
+        [own, board]
+            .into_iter()
+            .find(|v| !v.is_empty())
+            .unwrap_or(app)
+            .to_string()
+    };
+    let model = first(&t.model, &board.model, &settings.default_model);
+    let effort = first(&t.effort, &board.effort, &settings.default_effort);
+    let mut mode = first("", &board.mode, &settings.default_mode);
+    if mode == "auto" && !crate::core::supports_auto(&model) {
+        mode = "default".into();
+    }
+    (model, effort, mode)
+}
+
 fn ticket_not_found() -> anyhow::Error {
     anyhow!(tr!("ticket introuvable", "ticket not found"))
 }
@@ -169,6 +210,19 @@ pub(crate) fn title_missing() -> anyhow::Error {
     anyhow!(tr!(
         "Un ticket a besoin d'un titre.",
         "A ticket needs a title."
+    ))
+}
+
+pub(crate) fn comment_missing() -> anyhow::Error {
+    anyhow!(tr!("Dis ce qui ne va pas.", "Say what’s wrong."))
+}
+
+/// The refusal of an edit to a ticket that has started: also said by the tools, before they read
+/// the files of the images they were given.
+pub(crate) fn only_todo_is_edited() -> anyhow::Error {
+    anyhow!(tr!(
+        "Seul un ticket « À faire » se modifie.",
+        "Only a ticket in “To do” can be edited."
     ))
 }
 
@@ -231,6 +285,20 @@ pub struct TicketDraft {
     pub after: Vec<String>,
     /// An existing branch for its agent to take up; empty: the ticket's own, `ticket/<key>`.
     pub branch: String,
+    /// Its images, the whole list, in their order; None: they stay as they are (the tools of the
+    /// MCP server, the imports).
+    pub images: Option<Vec<DraftImage>>,
+}
+
+/// An image of a ticket's form: one the ticket has (`file`, in its folder), or one pasted or
+/// dropped (`data`, in base64).
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DraftImage {
+    pub name: String,
+    pub media_type: String,
+    pub file: String,
+    pub data: String,
 }
 
 impl<R: Runtime> Core<R> {
@@ -316,8 +384,19 @@ impl<R: Runtime> Core<R> {
         let project = self.project(project_id)?;
         // Refused before a key is used up.
         let branch = self.ticket_branch(&project, &d.branch).await?;
+        let id = new_id();
+        let dir = self.data.ticket_dir(&id);
+        let checked = ticketimages::check(&dir, &[], d.images.as_deref().unwrap_or_default())?;
         let current = git::head_branch(&project.path).await;
-        let key = {
+        // Written before a key is used up too (a disk that refuses them takes none), and off the
+        // async workers.
+        let images = if checked.is_empty() {
+            Vec::new()
+        } else {
+            let dir = dir.clone();
+            tokio::task::spawn_blocking(move || ticketimages::write(&dir, checked)).await??
+        };
+        let key = (|| -> Result<String> {
             let mut projects = self.projects.write();
             let p = projects
                 .iter_mut()
@@ -334,10 +413,17 @@ impl<R: Runtime> Core<R> {
             }
             let n = p.board.next_number.max(1);
             p.board.next_number = n + 1;
-            format!("{}-{n}", p.board.prefix)
+            Ok(format!("{}-{n}", p.board.prefix))
+        })();
+        let key = match key {
+            Ok(key) => key,
+            Err(e) => {
+                remove_images(dir).await;
+                return Err(e);
+            }
         };
         let mut ticket = Ticket {
-            id: new_id(),
+            id,
             project_id: project_id.to_string(),
             key,
             title,
@@ -347,27 +433,35 @@ impl<R: Runtime> Core<R> {
             created_at: now_ms(),
             external,
             branch,
+            images,
             ..Default::default()
         };
-        {
+        let pushed = {
             // Lock order: projects, then tickets. The project is checked again while both are
             // held (the rank and the push in one go): `remove_project`'s write of the projects
             // waits for this, and it takes the project's tickets once it is out.
             let projects = self.projects.read();
-            if !projects.iter().any(|p| p.id == project_id) {
-                return Err(project_not_found());
+            if projects.iter().any(|p| p.id == project_id) {
+                let mut tickets = self.tickets.write();
+                ticket.rank = tickets
+                    .iter()
+                    .filter(|t| t.project_id == project_id)
+                    .map(|t| t.rank)
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                // No ticket waits for a new one yet: it closes no loop.
+                ticket.after = board::after_of(&tickets, project_id, &ticket.id, &d.after);
+                tickets.push(ticket.clone());
+                true
+            } else {
+                false
             }
-            let mut tickets = self.tickets.write();
-            ticket.rank = tickets
-                .iter()
-                .filter(|t| t.project_id == project_id)
-                .map(|t| t.rank)
-                .max()
-                .unwrap_or(0)
-                + 1;
-            // No ticket waits for a new one yet: it closes no loop.
-            ticket.after = board::after_of(&tickets, project_id, &ticket.id, &d.after);
-            tickets.push(ticket.clone());
+        };
+        if !pushed {
+            // Not under the locks: the folder goes off the async workers.
+            remove_images(dir).await;
+            return Err(project_not_found());
         }
         self.emit_project(project_id);
         self.hub.emit(UiEvent::Ticket {
@@ -412,7 +506,23 @@ impl<R: Runtime> Core<R> {
         if !branch.is_empty() && branch == target.trim() {
             bail!(target_branch_refusal(i18n::ui()));
         }
-        let ticket = self.edit_ticket_with(
+        // The images pasted are written first, out of the lock. Then only this save's files go:
+        // those it wrote when it is refused, those it took away once it is done.
+        let dir = self.data.ticket_dir(id);
+        let (images, written) = match &d.images {
+            Some(list) => {
+                let had = self.ticket(id)?.images;
+                let images = ticketimages::write(&dir, ticketimages::check(&dir, &had, list)?)?;
+                let written = images
+                    .iter()
+                    .filter(|i| !had.iter().any(|h| h.file == i.file))
+                    .map(|i| i.file.clone())
+                    .collect();
+                (Some(images), written)
+            }
+            None => (None, Vec::new()),
+        };
+        let saved = self.edit_ticket_with(
             id,
             |all| {
                 let me = all
@@ -420,10 +530,7 @@ impl<R: Runtime> Core<R> {
                     .find(|t| t.id == id)
                     .ok_or_else(ticket_not_found)?;
                 if me.column != Column::Todo {
-                    bail!(tr!(
-                        "Seul un ticket « À faire » se modifie.",
-                        "Only a ticket in “To do” can be edited."
-                    ));
+                    return Err(only_todo_is_edited());
                 }
                 let after = board::after_of(all, &me.project_id, id, &d.after);
                 match board::cycle_refusal(i18n::ui(), all, id, &after) {
@@ -438,11 +545,50 @@ impl<R: Runtime> Core<R> {
                 t.max_loops = board::max_loops(d.max_loops);
                 t.after = after;
                 t.branch = branch;
-                Ok(t.clone())
+                let before = images.map(|i| std::mem::replace(&mut t.images, i));
+                Ok((t.clone(), before))
             },
-        )?;
+        );
+        match &saved {
+            Ok((t, Some(before))) => {
+                let gone: Vec<String> = before
+                    .iter()
+                    .filter(|b| !t.images.iter().any(|i| i.file == b.file))
+                    .map(|b| b.file.clone())
+                    .collect();
+                ticketimages::let_go(&dir, &gone);
+            }
+            Ok((_, None)) => {}
+            Err(_) => ticketimages::let_go(&dir, &written),
+        }
+        let (ticket, _) = saved?;
         self.schedule();
         Ok(ticket)
+    }
+
+    /// The images of the ticket, with their content: for its form, edited, to show.
+    pub fn ticket_images(&self, id: &str) -> Result<Vec<ticketimages::ImageData>> {
+        let t = self.ticket(id)?;
+        Ok(ticketimages::read(&self.data.ticket_dir(id), &t.images))
+    }
+
+    /// The images of the ticket, as its agent's first message carries them, and the names of those
+    /// it can't (their file is gone); read off the async workers (up to 18 MB of files).
+    async fn ticket_attachments(&self, t: &Ticket) -> (Vec<crate::core::Attachment>, Vec<String>) {
+        if t.images.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let (dir, images) = (self.data.ticket_dir(&t.id), t.images.clone());
+        tokio::task::spawn_blocking(move || ticketimages::attachments(&dir, &images))
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!("ticket {}: images not read: {e}", t.key);
+                // None was read: all of them are missing.
+                (
+                    Vec::new(),
+                    t.images.iter().map(|i| i.name.clone()).collect(),
+                )
+            })
     }
 
     /// "Passer en tête": only a ticket "À faire" has a rank to change.
@@ -535,6 +681,18 @@ impl<R: Runtime> Core<R> {
 
     /// "Lancer": a ticket that starts even with the autopilot off.
     pub fn ticket_start(self: &Arc<Self>, id: &str) -> Result<()> {
+        self.ticket_start_with(id, None, None)
+    }
+
+    /// `ticket_start`, giving the ticket's agent a model and an effort of its own (the MCP tool's
+    /// `start_ticket`): `Some` writes it on the ticket, an empty one going back to the board's,
+    /// `None` leaves it as it is. Nothing is written for a ticket that has started already.
+    pub fn ticket_start_with(
+        self: &Arc<Self>,
+        id: &str,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<()> {
         // A project no account serves starts nothing, nor later on its own once one does.
         let project = self.ticket(id)?.project_id;
         if !accounts::serves_any(&self.settings.read(), Some(&project)) {
@@ -549,6 +707,12 @@ impl<R: Runtime> Core<R> {
                 ));
             }
             t.forced = true;
+            if let Some(model) = model {
+                t.model = model;
+            }
+            if let Some(effort) = effort {
+                t.effort = effort;
+            }
             Ok(())
         })?;
         self.telemetry
@@ -582,10 +746,19 @@ impl<R: Runtime> Core<R> {
             id: id.to_string(),
             project_id: t.project_id.clone(),
         });
+        self.request_save();
+        if !t.images.is_empty() {
+            // The state without the ticket is on disk before its images go: a crash in between
+            // would bring it back without them. Off the async workers, as the saver does.
+            let c = self.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move || c.save_now()).await {
+                log::warn!("{}: state not saved before its images go: {e}", t.key);
+            }
+        }
+        remove_images(self.data.ticket_dir(id)).await;
         for ticket in freed {
             self.hub.emit(UiEvent::Ticket { ticket });
         }
-        self.request_save();
         if matches!(t.column, Column::Doing | Column::Review) {
             if let Some(a) = t.agent_id.as_deref().filter(|a| self.agent(a).is_ok()) {
                 if let Err(e) = self.archive_agent(a, true).await {
@@ -646,25 +819,27 @@ impl<R: Runtime> Core<R> {
         git::branches(&p.path).await
     }
 
-    /// The project is closed: its tickets go with it, and what its board said.
-    pub(crate) fn drop_project_tickets(&self, project_id: &str) {
+    /// The project is closed: its tickets leave the board, and what its board said. They are
+    /// given back, for its history to keep (no file of theirs goes here: `erase_history_files`).
+    pub(crate) fn drop_project_tickets(&self, project_id: &str) -> Vec<Ticket> {
         self.board_issues.lock().remove(project_id);
-        let gone: Vec<String> = {
+        let gone: Vec<Ticket> = {
             let mut tickets = self.tickets.write();
-            let ids = tickets
+            let gone = tickets
                 .iter()
                 .filter(|t| t.project_id == project_id)
-                .map(|t| t.id.clone())
+                .cloned()
                 .collect();
             tickets.retain(|t| t.project_id != project_id);
-            ids
+            gone
         };
-        for id in gone {
+        for t in &gone {
             self.hub.emit(UiEvent::TicketRemoved {
-                id,
+                id: t.id.clone(),
                 project_id: project_id.to_string(),
             });
         }
+        gone
     }
 
     // ---------- scheduler ----------
@@ -1121,7 +1296,8 @@ impl<R: Runtime> Core<R> {
         let settings = self.settings.read().clone();
         // What its Claude is told, from its protocol to its first message.
         let lang = self.lang().claude;
-        let or = |v: &str, default: &str| Some(if v.is_empty() { default } else { v }.to_string());
+        // Its ticket's own model and effort come first, then the board's; the mode is the board's.
+        let (model, effort, mode) = ticket_agent_options(t, s, &settings);
         // The branch it takes up may still be in the worktree of its earlier agent, archived.
         if !t.branch.is_empty() {
             self.release_archived_holder(project, t).await?;
@@ -1147,9 +1323,9 @@ impl<R: Runtime> Core<R> {
             .create_agent_with(
                 &project.id,
                 AgentOptions {
-                    model: or(&s.model, &settings.default_model),
-                    effort: or(&s.effort, &settings.default_effort),
-                    mode: or(&s.mode, &settings.default_mode),
+                    model: Some(model),
+                    effort: Some(effort),
+                    mode: Some(mode),
                     name: Some(board::agent_name(&t.key, &t.title)),
                     worktree: new_branch,
                     append_prompt: Some(board::protocol_prompt_for(lang, t, ports, isola)),
@@ -1161,6 +1337,8 @@ impl<R: Runtime> Core<R> {
                     isolated: None,
                     branch: taken_up,
                     base,
+                    // Set apart from Remote Control by hand for its earlier agent: so is this one.
+                    remote_off: t.remote_off,
                 },
             )
             .await;
@@ -1189,9 +1367,13 @@ impl<R: Runtime> Core<R> {
             .agent(&agent_id)
             .ok()
             .and_then(|h| h.lock().setup_failure.take());
-        let first =
-            board::with_setup_failure(lang, board::first_message(lang, t), failure.as_deref());
-        self.send_message(&agent_id, first, vec![]).await
+        let (images, missing) = self.ticket_attachments(t).await;
+        let first = board::with_setup_failure(
+            lang,
+            board::first_message_with(lang, t, images.len(), &missing),
+            failure.as_deref(),
+        );
+        self.send_message(&agent_id, first, images).await
     }
 
     // ---------- ends of turns ----------
@@ -1369,7 +1551,19 @@ impl<R: Runtime> Core<R> {
         agent_id: &str,
         text: String,
     ) -> Result<()> {
-        if let Err(e) = self.send_message(agent_id, text, vec![]).await {
+        self.send_or_block_with(ticket_id, agent_id, text, Vec::new())
+            .await
+    }
+
+    /// `send_or_block` of a message with `attachments`.
+    async fn send_or_block_with(
+        self: &Arc<Self>,
+        ticket_id: &str,
+        agent_id: &str,
+        text: String,
+        attachments: Vec<crate::core::Attachment>,
+    ) -> Result<()> {
+        if let Err(e) = self.send_message(agent_id, text, attachments).await {
             log::warn!("agent {agent_id}: message to its ticket's agent not sent: {e:#}");
             let _ = self.edit_ticket(ticket_id, |t| {
                 t.blocked = Some(error_reason(&e));
@@ -1562,13 +1756,18 @@ impl<R: Runtime> Core<R> {
         })?;
         match t.agent_id.as_deref().and_then(|a| self.live_agent(a)) {
             Some(agent) => {
-                // Its start failed once it was made: the ticket was never given to it.
-                let text = if agent.prompts == 0 {
-                    board::first_message(lang, &t)
+                // Its start failed once it was made: the ticket was never given to it, nor its
+                // images.
+                let (text, images) = if agent.prompts == 0 {
+                    let (images, missing) = self.ticket_attachments(&t).await;
+                    (
+                        board::first_message_with(lang, &t, images.len(), &missing),
+                        images,
+                    )
                 } else {
-                    board::resume_message(lang, &t.key)
+                    (board::resume_message(lang, &t.key), Vec::new())
                 };
-                self.send_or_block(id, &agent.id, text).await
+                self.send_or_block_with(id, &agent.id, text, images).await
             }
             None => {
                 self.edit_ticket(id, |t| {
@@ -1627,6 +1826,26 @@ impl<R: Runtime> Core<R> {
         }
     }
 
+    /// The user set the agent apart from Remote Control, or turned it on for it by hand: its
+    /// ticket remembers it for the agents it gets next (sent back to do and started again).
+    pub(crate) fn remember_remote_off(&self, agent_id: &str, off: bool) {
+        let ticket = self
+            .tickets
+            .read()
+            .iter()
+            .find(|t| t.agent_id.as_deref() == Some(agent_id) && t.remote_off != off)
+            .map(|t| t.id.clone());
+        if let Some(id) = ticket {
+            let _ = self.edit_ticket(&id, |t| {
+                // Checked again under the lock: it may have moved since.
+                if t.agent_id.as_deref() == Some(agent_id) {
+                    t.remote_off = off;
+                }
+                Ok(())
+            });
+        }
+    }
+
     // ---------- validation ----------
 
     fn set_step(&self, id: &str, step: &str) {
@@ -1671,6 +1890,29 @@ impl<R: Runtime> Core<R> {
     pub async fn ticket_approve(self: &Arc<Self>, id: &str) -> Result<()> {
         // To the end of its cleanup (agent archived, worktree removed), after its step is over.
         let _working = self.working();
+        let t = self.approve_begin(id)?;
+        self.approve_run(id, t).await;
+        Ok(())
+    }
+
+    /// "Valider…" for a client that does not wait for its end (the MCP server): refused as the
+    /// window's, then run in the background; follow it on the ticket (step, blocked, column).
+    pub fn ticket_approve_detached(self: &Arc<Self>, id: &str) -> Result<()> {
+        // Held before the first step is set on the ticket and to the end of the background run: the
+        // app does not restart for an update in between.
+        let working = self.working_owned();
+        let t = self.approve_begin(id)?;
+        let (core, id) = (self.clone(), id.to_string());
+        tauri::async_runtime::spawn(async move {
+            let _working = working;
+            core.approve_run(&id, t).await;
+        });
+        Ok(())
+    }
+
+    /// The checks of an approval, and its first step set on the ticket ("Validation…"): from then
+    /// on it is held, and a second one is refused.
+    fn approve_begin(self: &Arc<Self>, id: &str) -> Result<Ticket> {
         let t = self.ticket(id)?;
         if t.column != Column::Review {
             bail!(Refusal::NotInReview);
@@ -1683,18 +1925,28 @@ impl<R: Runtime> Core<R> {
         if busy {
             bail!(Refusal::AgentBusy);
         }
-        let t = self.edit_ticket(id, |t| {
+        self.edit_ticket(id, |t| {
             if t.column != Column::Review {
                 bail!(Refusal::NotInReview);
             }
             if t.step.is_some() {
                 bail!(Refusal::ApprovingAlready);
             }
+            // Under the tickets' lock, as the closing looks for a validation under way: one of
+            // the two sees the other.
+            if self.is_closing(&t.project_id) {
+                bail!(Refusal::ProjectClosing);
+            }
             t.blocked = None;
             t.conflict = false;
             t.step = Some(tr!("Validation…", "Approving…"));
             Ok(t.clone())
-        })?;
+        })
+    }
+
+    /// The approval `approve_begin` started: its validation, a failed step blocking the ticket,
+    /// then what may start starts.
+    async fn approve_run(self: &Arc<Self>, id: &str, t: Ticket) {
         if let Err(e) = self.validate(&t).await {
             log::warn!("ticket {}: validation failed: {e:#}", t.key);
             let reason = error_line(&e);
@@ -1713,7 +1965,6 @@ impl<R: Runtime> Core<R> {
             }
         }
         self.schedule();
-        Ok(())
     }
 
     async fn validate(self: &Arc<Self>, t: &Ticket) -> Result<()> {
@@ -1727,7 +1978,7 @@ impl<R: Runtime> Core<R> {
         // Its test launches stop first: their servers would hold the worktree's files and ports.
         self.stop_test_runs(&agent_id);
         // Tests.
-        if s.tests_first && !s.test_command.trim().is_empty() {
+        if s.tests_first_on() {
             self.set_step(&t.id, "Tests…");
             let settings = self.settings.read().clone();
             let shell = crate::pty::detect_shells(&settings)
@@ -1867,6 +2118,7 @@ impl<R: Runtime> Core<R> {
             x.outcome = Some(outcome.ui);
             x.outcome_claude = Some(outcome.claude);
             x.outcome_url = outcome.url;
+            x.outcome_commit = outcome.commit;
             x.done_at = Some(now_ms());
             x.cost = cost;
             Ok(())
@@ -1994,12 +2246,20 @@ impl<R: Runtime> Core<R> {
             drop_worktree(&repo, &tmp).await;
         }
         self.git.refresh(&project.id);
+        // The commit the merge made, read before another merge into the target may go.
+        let commit = match &result {
+            Ok(git::Integrated::Done) => git::branch_head(&repo, target).await,
+            _ => None,
+        };
         // The target is as it was: the next merge into this repository may go.
         drop(merging);
         match result? {
-            git::Integrated::Done => Ok(Some(board::Outcome::of(self.lang().claude, |l| {
-                board::merged_outcome(l, target, &s.strategy)
-            }))),
+            git::Integrated::Done => Ok(Some(
+                board::Outcome::of(self.lang().claude, |l| {
+                    board::merged_outcome(l, target, &s.strategy)
+                })
+                .with_commit(commit),
+            )),
             git::Integrated::Conflict(files) => {
                 self.on_conflict(t, s, target, files).await?;
                 Ok(None)
@@ -2225,6 +2485,9 @@ impl<R: Runtime> Core<R> {
             if t.step.is_some() {
                 bail!(Refusal::ApprovingAlready);
             }
+            if self.is_closing(&t.project_id) {
+                bail!(Refusal::ProjectClosing);
+            }
             t.step = Some("Merge…".into());
             Ok(t.agent_id.clone())
         })?;
@@ -2260,7 +2523,7 @@ impl<R: Runtime> Core<R> {
     pub async fn ticket_reject(self: &Arc<Self>, id: &str, comment: &str) -> Result<()> {
         let comment = comment.trim();
         if comment.is_empty() {
-            bail!(tr!("Dis ce qui ne va pas.", "Say what’s wrong."));
+            return Err(comment_missing());
         }
         let busy = self
             .ticket(id)?
