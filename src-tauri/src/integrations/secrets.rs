@@ -495,8 +495,8 @@ mod tests {
 
     #[test]
     fn the_apps_entries_are_under_its_identifier_and_a_sandboxs_apart() {
-        assert_eq!(keychain_service(false), "dev.gagnaire.escouade");
-        assert_eq!(keychain_service(true), "dev.gagnaire.escouade.sandbox");
+        assert_eq!(keychain_service(false), "dev.kulturman.escouade");
+        assert_eq!(keychain_service(true), "dev.kulturman.escouade.sandbox");
         assert_eq!(
             Service::ALL.map(entry),
             ["jira", "trello", "github", "linear"]

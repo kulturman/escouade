@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Escouade",
+  "productName": "Escouade K",
   "mainBinaryName": "escouade",
   "version": "1.7.9",
-  "identifier": "dev.gagnaire.escouade",
+  "identifier": "dev.kulturman.escouade",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

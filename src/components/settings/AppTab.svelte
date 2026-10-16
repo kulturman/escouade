@@ -202,7 +202,7 @@
       >
       <Switch label={t('settings.about.telemetry')} bind:on={() => s.telemetry === true, (on) => (s.telemetry = on)} />
     </Row>
-    <Row label={t('settings.about.localData')} desc="~/.escouade/" />
+    <Row label={t('settings.about.localData')} desc="~/.escouade-kulturman/" />
   </Group>
 {/if}
 

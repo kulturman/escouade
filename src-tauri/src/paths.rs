@@ -3,11 +3,13 @@ use std::path::{Path, PathBuf};
 // The app was « Claude Code Manager » until 0.1.3: what it keeps on disk moves to its new names
 // on the first launch that finds it under the old ones.
 
-pub const DATA_DIR_NAME: &str = ".escouade";
+// « Escouade K », kulturman's fork, lives apart from guillaume-gagnaire's Escouade: its own data
+// folder and identifier (keychain, WebView), so that both run side by side.
+pub const DATA_DIR_NAME: &str = ".escouade-kulturman";
 const OLD_DATA_DIR_NAME: &str = ".claude-code-manager";
 /// The app identifier (tauri.conf.json), which names its WebView and window-state folders, and its
 /// entries in the system's keychain.
-pub(crate) const IDENTIFIER: &str = "dev.gagnaire.escouade";
+pub(crate) const IDENTIFIER: &str = "dev.kulturman.escouade";
 const OLD_IDENTIFIER: &str = "dev.gagnaire.claude-code-manager";
 /// A project's « Préfixe des branches des agents » until it sets its own (agents made before 0.1.4
 /// keep `ccm/`).
@@ -992,9 +994,16 @@ mod tests {
     }
 
     #[test]
+    fn the_identifier_is_the_one_of_tauri_conf() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], IDENTIFIER);
+    }
+
+    #[test]
     fn a_folder_under_the_former_name_moves_to_the_new_one_and_is_marked() {
         let d = test_dir("migrate-move");
-        let (old, new) = (d.join(".claude-code-manager"), d.join(".escouade"));
+        let (old, new) = (d.join(".claude-code-manager"), d.join(DATA_DIR_NAME));
         std::fs::create_dir_all(old.join("conversations")).unwrap();
         std::fs::write(old.join("state.json"), "{}").unwrap();
         let mut notes = vec![];
@@ -1087,7 +1096,7 @@ mod tests {
     #[test]
     fn a_development_build_never_moves_the_users_data() {
         let d = test_dir("migrate-debug");
-        let (old, new) = (d.join(".claude-code-manager"), d.join(".escouade"));
+        let (old, new) = (d.join(".claude-code-manager"), d.join(DATA_DIR_NAME));
         std::fs::create_dir_all(&old).unwrap();
         assert_eq!(data_dir_in(&d, true, &mut vec![]), old);
         assert!(old.is_dir() && !new.exists());
@@ -1102,7 +1111,7 @@ mod tests {
         let old = d.join(".claude-code-manager");
         std::fs::create_dir_all(&old).unwrap();
         let new = data_dir_in(&d, false, &mut vec![]);
-        assert_eq!(new, d.join(".escouade"));
+        assert_eq!(new, d.join(DATA_DIR_NAME));
         assert!(!old.exists());
         // The app asks twice at start-up (log, then data): the second time is a no-op.
         assert_eq!(data_dir_in(&d, false, &mut vec![]), new);

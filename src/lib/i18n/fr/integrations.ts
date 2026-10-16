@@ -20,7 +20,7 @@ export default {
     note: "Les jetons restent sur cette machine, à part des réglages, et ne servent qu'aux appels de ces services.",
     connected: 'Connecté · {label}',
     notConnected: 'Non connecté',
-    keychainUnavailable: 'Trousseau du système indisponible : le jeton reste dans ~/.escouade/integrations.json.',
+    keychainUnavailable: 'Trousseau du système indisponible : le jeton reste dans ~/.escouade-kulturman/integrations.json.',
     keychainUnreadable: 'Trousseau du système illisible : relance Escouade ou reconnecte le compte.',
     disconnect: 'Déconnecter',
     connectEllipsis: 'Connecter…',
