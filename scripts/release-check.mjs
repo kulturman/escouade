@@ -10,7 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // The updater of each system looks its own key up: a latest.json without one stops its updates.
-export const REQUIRED = ['windows-x86_64', 'darwin-aarch64', 'darwin-x86_64', 'linux-x86_64'];
+// Escouade K is released for macOS only (Apple Silicon and Intel).
+export const REQUIRED = ['darwin-aarch64', 'darwin-x86_64'];
 
 /** `{ tag, name }` of a `…/releases/download/<tag>/<name>` link, %xx escapes decoded; null for any other. */
 function download(url) {

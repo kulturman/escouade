@@ -54,7 +54,7 @@ Sous macOS, une app lancée depuis le Finder ou le Dock ne reçoit pas le `PATH`
 
 ## Installation
 
-**Escouade K** : les installeurs sont dans les [releases de ce fork](https://github.com/kulturman/escouade/releases/latest). Ils ne sont pas signés : au premier lancement, macOS demande une confirmation (clic droit sur l'app › Ouvrir) et Windows affiche SmartScreen (« Informations complémentaires › Exécuter quand même »).
+**Escouade K** (macOS seulement) : télécharge le `.dmg` des [releases de ce fork](https://github.com/kulturman/escouade/releases/latest). L'app n'est pas signée par Apple : au premier lancement, fais un clic droit sur l'app › Ouvrir.
 
 Pour Escouade :
 
