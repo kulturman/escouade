@@ -23,6 +23,8 @@ pub const ENDPOINT: &str = "https://aptabase.gagnaire.dev/api/v0/events";
 /// Escouade K (kulturman's fork) has no Aptabase of its own: it never sends, whatever the settings
 /// say (a `settings.json` copied from Escouade may say yes).
 pub const SENDS: bool = false;
+// Escouade K does not build if it sends.
+const _: () = assert!(!SENDS);
 /// What the SDK says it is, in its `sdkVersion` (40 characters at most).
 const SDK: &str = concat!("escouade@", env!("CARGO_PKG_VERSION"));
 /// Aptabase takes 25 events per request at most.
@@ -529,11 +531,6 @@ mod tests {
 
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
-    }
-
-    #[test]
-    fn escouade_k_sends_nothing() {
-        assert!(!SENDS);
     }
 
     #[test]

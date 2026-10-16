@@ -2,7 +2,11 @@
 
 Les changements visibles d'Escouade, version par version. Les notes de chaque release GitHub (et de la mise à jour intégrée) reprennent la section de sa version.
 
-## [Non publié]
+Escouade K, le fork de kulturman, part d'Escouade 1.7.9 : sa 2.0.0 reprend tout ce qu'Escouade avait de plus au 2026-10-16, et ajoute ses propres features.
+
+## [2.0.0] — 2026-10-16
+
+Première version d'Escouade K. Elle s'installe à côté d'Escouade sans la toucher : son nom, son identifiant (`dev.kulturman.escouade`), son dossier de données (`~/.escouade-kulturman/`) et ses mises à jour, depuis les releases de kulturman/escouade. Tes projets, tes agents et tes réglages d'Escouade ne sont pas repris ; les jetons des intégrations sont à ressaisir. Aucune statistique d'usage n'est envoyée.
 
 ### Ajouts
 

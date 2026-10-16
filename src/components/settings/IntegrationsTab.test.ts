@@ -68,7 +68,9 @@ describe('IntegrationsTab', () => {
     backend();
     app.accounts = [{ ...ACCOUNTS[0], inFile: true }, off('trello'), { service: 'github', connected: true, label: '@ada', inFile: false }];
     render(SettingsModal, { tab: 'integrations', projectId: 'p1' });
-    const notes = within(panel()).getAllByText('Trousseau du système indisponible : le jeton reste dans ~/.escouade-kulturman/integrations.json.');
+    const notes = within(panel()).getAllByText(
+      'Trousseau du système indisponible : le jeton reste dans ~/.escouade-kulturman/integrations.json.',
+    );
     expect(notes).toHaveLength(1);
     expect(notes[0].closest('.acct')).toHaveTextContent('Connecté · ada@atlas.dev · atlas.atlassian.net');
   });
