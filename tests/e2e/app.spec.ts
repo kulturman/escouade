@@ -1093,14 +1093,11 @@ test('an image pasted or dropped in a ticket is kept in its folder, shown on its
 test.describe('the first start', () => {
   test.use({ preStart: { run: () => ({ telemetry: null }) } });
 
-  test('asks about the usage statistics, and keeps the answer', async ({ app }) => {
+  // Escouade K sends no usage statistics (`telemetry::SENDS`): the question of the first start is gone.
+  test('never asks about the usage statistics', async ({ app }) => {
     const { page } = app;
-    const dialog = page.getByRole('dialog', { name: 'Aider à améliorer Escouade ?' });
-    await expect(dialog).toBeVisible();
-    await dialog.getByRole('button', { name: 'Non merci' }).click();
-    await expect(dialog).toBeHidden();
-    const settings = () => JSON.parse(fs.readFileSync(path.join(app.data, 'settings.json'), 'utf8'));
-    await expect.poll(() => settings().telemetry).toBe(false);
+    await expect(page.getByText(/^Ajoute un projet pour y lancer des agents Claude Code/)).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Aider à améliorer Escouade ?' })).toHaveCount(0);
     expect(fs.existsSync(path.join(app.data, 'telemetry-id'))).toBe(false);
   });
 });

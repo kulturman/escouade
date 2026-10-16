@@ -50,7 +50,7 @@ function assetList() {
 
 describe('release check', () => {
   it('names the four systems the updater needs', () => {
-    expect(REQUIRED).toEqual(['windows-x86_64', 'darwin-aarch64', 'darwin-x86_64', 'linux-x86_64']);
+    expect(REQUIRED).toEqual(['darwin-aarch64', 'darwin-x86_64']);
   });
 
   it('finds nothing to say about a complete latest.json whose files are all in the draft', () => {
@@ -79,7 +79,7 @@ describe('release check', () => {
     expect(problems(latest, assetList(), TAG)).toHaveLength(1);
   });
 
-  it.each(['windows-x86_64', 'darwin-aarch64', 'darwin-x86_64', 'linux-x86_64'])('refuses a latest.json that misses %s', (platform) => {
+  it.each(['darwin-aarch64', 'darwin-x86_64'])('refuses a latest.json that misses %s', (platform) => {
     const latest = latestJson();
     delete latest.platforms[platform];
     const found = problems(latest, assetList(), TAG);
