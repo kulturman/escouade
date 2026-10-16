@@ -63,23 +63,23 @@ describe('EditorView', () => {
     expect(screen.getByText('Enregistré')).toBeInTheDocument();
   });
 
-  it('shows a Markdown file rendered, and back as text, from the status bar', async () => {
+  it('opens a Markdown file rendered, shown as text from the status bar and rendered again', async () => {
     backend();
     await app.openEditor({ source: 'project', path: 'README.md' });
     render(EditorView, { project: project() });
-    await userEvent.click(await screen.findByRole('button', { name: 'Aperçu' }));
     expect(await screen.findByRole('heading', { name: 'demo' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Texte' }));
     expect(screen.queryByRole('heading', { name: 'demo' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Aperçu' })).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(screen.getByRole('button', { name: 'Aperçu' }));
+    expect(await screen.findByRole('heading', { name: 'demo' })).toBeInTheDocument();
   });
 
   it('finds in a Markdown preview with Ctrl+F, and closes the search with Escape', async () => {
     backend();
     await app.openEditor({ source: 'project', path: 'README.md' });
     render(EditorView, { project: project() });
-    await userEvent.click(await screen.findByRole('button', { name: 'Aperçu' }));
-    await screen.findByRole('heading', { name: 'demo' });
+    await userEvent.click(await screen.findByRole('heading', { name: 'demo' }));
     await userEvent.keyboard('{Control>}f{/Control}');
     await userEvent.type(screen.getByRole('textbox', { name: 'Chercher dans l’aperçu' }), 'dem');
     expect(screen.getByText('1/1')).toBeInTheDocument();
@@ -87,6 +87,14 @@ describe('EditorView', () => {
     expect(screen.getByText('Aucun résultat')).toBeInTheDocument();
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('search')).toBeNull();
+  });
+
+  it('opens a Markdown file as text when a line of it is asked for', async () => {
+    backend({ fs_read: (a) => text(a.path === 'README.md' ? '# demo\n\nun\ndeux\n' : 'const a = 2;\n') });
+    await app.openEditor({ source: 'project', path: 'README.md', line: 3 });
+    render(EditorView, { project: project() });
+    expect(await screen.findByText('Ln 3, Col 1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Aperçu' })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('offers no preview for a file that is not Markdown', async () => {
@@ -384,7 +392,7 @@ describe('EditorView', () => {
     const shown = () => container.querySelector('.cm-content')?.textContent;
     expect(await screen.findByText('Ln 3, Col 1')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('tab', { name: /README\.md/ }));
-    await expect.poll(shown).toBe('# demo');
+    expect(await screen.findByRole('heading', { name: 'demo' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('tab', { name: /app\.ts/ }));
     await expect.poll(shown).toBe('abcd');
     await new Promise((r) => setTimeout(r, 30));
@@ -1880,6 +1888,8 @@ describe('EditorView and « Ouvrir un fichier »', () => {
     await screen.findByRole('option', { name: /README/ });
     await userEvent.keyboard('{Enter}');
     await expect.poll(() => app.editor.p1.places.project.active).toBe('README.md');
+    // A Markdown file opens rendered: its text, to move in it.
+    await userEvent.click(await screen.findByRole('button', { name: 'Texte' }));
     await expect.poll(() => container.querySelector('.cm-content')?.textContent?.startsWith('# demo')).toBe(true);
     const view = CodeMirror.findFromDOM(container.querySelector('.cm-editor') as HTMLElement)!;
     view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', altKey: true, bubbles: true, cancelable: true }));

@@ -58,10 +58,18 @@
   const activeKey = $derived(activePath ? buffers.key(project.id, source, activePath) : null);
   const buf = $derived(activeKey ? buffers.all[activeKey] : undefined);
   const dirty = $derived(buffers.isDirty(buf));
-  /** A Markdown file shown rendered (« Aperçu ») rather than as text, file by file. */
+  /** A Markdown file opens rendered (« Aperçu »); « Texte » shows it as text, file by file. */
   let previews = $state<Record<string, boolean>>({});
   const isMarkdown = $derived(!!activePath && /\.(md|markdown)$/i.test(activePath));
-  const previewing = $derived(isMarkdown && !!buf && !!previews[buf.key]);
+  const previewing = $derived(isMarkdown && !!buf && (previews[buf.key] ?? true));
+
+  // A line asked for in a Markdown file (a search result, a definition) is shown in its text.
+  $effect(() => {
+    const key = buf?.key;
+    // Not line 1 alone: « Ouvrir un fichier » puts the cursor at the top of any file it opens.
+    const asked = reveal && (reveal.line > 1 || reveal.col);
+    if (asked && isMarkdown && key && previews[key] !== false) previews[key] = false;
+  });
 
   let status = $state<Record<string, FileStatus>>({});
   let cursor = $state({ line: 1, col: 1 });
