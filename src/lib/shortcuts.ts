@@ -5,6 +5,7 @@ import { findInFiles } from './editor/search.svelte';
 import { IS_MAC, primaryKey } from './platform';
 import { app } from './state.svelte';
 import { voice } from './voice.svelte';
+import { isVoiceShortcut } from './voice-shortcut';
 
 /**
  * The digit of Ctrl+1…9 (Cmd+1…9 on macOS) from the physical key: on AZERTY keyboards the digit row types & é " '…
@@ -65,16 +66,16 @@ const overviewKey = (e: KeyboardEvent) => e.shiftKey && e.key.toLowerCase() === 
  * sends nothing at all for Ctrl+Shift+A. On macOS the app's shortcuts use Cmd, which the shell
  * never gets: they all go to the app, except copy, paste and select all (Cmd+A), handled by the
  * terminal. Ctrl+K stays with the shell (it cuts the end of the line), and so does Ctrl+P
- * (previous command) on Windows: « Ouvrir un fichier » is Cmd+P there. Ctrl+Shift+M (the dictation) goes to the app
- * everywhere.
+ * (previous command) on Windows: « Ouvrir un fichier » is Cmd+P there. The dictation's shortcut (Ctrl+Shift+M, or the
+ * one chosen in the settings) goes to the app everywhere.
  */
 export function isAppShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
+  // The dictation: also from Claude Code's view, where the terminal has the keyboard (with Alt too, if chosen so).
+  if (isVoiceShortcut(e, app.settings?.voiceShortcut, mac)) return true;
   if (e.altKey) return false;
   if (agentCycle(e)) return true;
   if (!primaryKey(e, mac)) return false;
   const k = e.key.toLowerCase();
-  // The dictation: also from Claude Code's view, where the terminal has the keyboard.
-  if (k === 'm' && e.shiftKey) return true;
   if (overviewKey(e)) return true;
   if (mac) return digit(e) !== null || ['n', 't', 'j', ',', 'b', 'l', 'k'].includes(k) || isP(e);
   return digit(e) !== null || k === ',' || k === 'j';
@@ -155,6 +156,18 @@ export function doubleShift(e: KeyboardEvent, now = performance.now()): boolean 
 
 /** Runs the shortcut matching `e`. Returns true when the event was handled. */
 export function handleShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
+  // The dictation, first: its shortcut may hold Alt, if chosen so. It stops the one under way wherever it is for, a
+  // dialog open too; else it starts one for the agent on screen.
+  if (isVoiceShortcut(e, app.settings?.voiceShortcut, mac)) {
+    if (voice.phase === 'recording') {
+      void voice.stop();
+      return true;
+    }
+    const a = app.agent;
+    if (!a || !app.agentOnScreen || app.modal) return false;
+    void voice.toggle({ kind: a.terminal ? 'terminal' : 'composer', agentId: a.id });
+    return true;
+  }
   // Ctrl+Alt is AltGr on French keyboards (e.g. AltGr+2 = ~): never a shortcut.
   if (e.altKey) return false;
   // Taken whatever the window shows (a dialog open, no project): a Ctrl+P left to the WebView prints the page.
@@ -218,17 +231,6 @@ export function handleShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
   }
   if (k === 'l' && e.shiftKey) {
     app.toggleLayout();
-    return true;
-  }
-  // The dictation: stops the one under way wherever it is for, else starts one for the agent on screen.
-  if (k === 'm' && e.shiftKey) {
-    if (voice.phase === 'recording') {
-      void voice.stop();
-      return true;
-    }
-    const a = app.agent;
-    if (!a || !app.agentOnScreen) return false;
-    void voice.toggle({ kind: a.terminal ? 'terminal' : 'composer', agentId: a.id });
     return true;
   }
   if (overviewKey(e)) {

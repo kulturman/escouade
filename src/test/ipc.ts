@@ -74,6 +74,7 @@ export const SETTINGS: Settings = {
   terminalView: false,
   voiceModel: 'small-q5_1',
   voiceLanguage: 'ui',
+  voiceShortcut: 'Ctrl+Shift+M',
   remoteControlAll: false,
 };
 

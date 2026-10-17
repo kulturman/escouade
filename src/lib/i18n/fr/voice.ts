@@ -41,6 +41,10 @@ export default {
     download: 'Télécharger',
     delete: 'Supprimer',
     cancel: 'Annuler',
+    shortcut: 'Raccourci',
+    shortcutDesc: 'Clique, puis presse la combinaison voulue, avec Ctrl (Cmd sous macOS) ou Alt. Échap annule.',
+    shortcutRecording: 'Presse la combinaison…',
+    shortcutDefault: 'Par défaut',
     language: 'Langue parlée',
     languageDesc: 'La détection automatique se trompe plus souvent sur un prompt court.',
     languages: {

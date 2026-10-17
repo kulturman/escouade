@@ -52,6 +52,8 @@ export interface Settings {
   voiceModel: string;
   /** « Dictée › Langue parlée »: `ui` (the interface's), `auto` (detected) or a language code. */
   voiceLanguage: string;
+  /** « Dictée › Raccourci »: `Ctrl+Shift+M` (Cmd on macOS), as the app writes its shortcuts. */
+  voiceShortcut: string;
   /** « Remote control pour tous les agents »: every agent of every project is reachable from claude.ai and the Claude app, unless set apart by hand (`Agent.remoteOff`). */
   remoteControlAll: boolean;
 }

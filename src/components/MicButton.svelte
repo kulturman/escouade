@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
   import { keyLabel } from '../lib/platform';
+  import { app } from '../lib/state.svelte';
   import { tip } from '../lib/tip';
   import { voice, type VoiceTarget } from '../lib/voice.svelte';
 
@@ -10,7 +11,7 @@
   const mine = $derived(voice.isFor(target));
   const recording = $derived(voice.phase === 'recording');
   const working = $derived(mine && (voice.phase === 'starting' || voice.phase === 'transcribing'));
-  const key = keyLabel('Ctrl+Shift+M');
+  const key = $derived(keyLabel(app.settings.voiceShortcut || 'Ctrl+Shift+M'));
   const label = $derived(
     recording ? t('voice.button.stop', { key }) : working ? t('voice.button.transcribing') : t('voice.button.start', { key }),
   );
