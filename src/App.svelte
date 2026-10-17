@@ -3,7 +3,7 @@
   import { t } from './lib/i18n';
   import { api } from './lib/ipc';
   import { app } from './lib/state.svelte';
-  import { handleShortcut, holdPrint } from './lib/shortcuts';
+  import { doubleShift, handleShortcut, holdPrint } from './lib/shortcuts';
   import { watchForUpdates } from './lib/updater';
   import { watchPresence } from './lib/presence';
   import { createWarmer } from './lib/warm';
@@ -78,7 +78,15 @@
   }
 </script>
 
-<svelte:window onkeydowncapture={(e) => holdPrint(e)} onkeydown={onKeydown} onfocus={() => app.markSeen()} />
+<svelte:window
+  onkeydowncapture={(e) => {
+    holdPrint(e);
+    doubleShift(e);
+  }}
+  onkeyupcapture={(e) => doubleShift(e)}
+  onkeydown={onKeydown}
+  onfocus={() => app.markSeen()}
+/>
 
 <div class="root">
   <TitleBar />

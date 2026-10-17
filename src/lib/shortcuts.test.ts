@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agent, fakeBackend, project, resetApp } from '../test/ipc';
 import { buffers } from './editor/buffers.svelte';
 import { setFindInFiles } from './editor/search.svelte';
-import { answersHere, ariaEnter, enterAnswer, handleShortcut, holdPrint, isAppShortcut, optionAnswer } from './shortcuts';
+import { answersHere, ariaEnter, doubleShift, enterAnswer, handleShortcut, holdPrint, isAppShortcut, optionAnswer } from './shortcuts';
 import { app } from './state.svelte';
 import { voice } from './voice.svelte';
 
@@ -99,6 +99,28 @@ describe('handleShortcut', () => {
     expect(handleShortcut(key('A', { shiftKey: true }), true)).toBe(false);
     expect(handleShortcut(new KeyboardEvent('keydown', { key: 'a', metaKey: true, shiftKey: true }), true)).toBe(true);
     expect(app.ui.view).toBe('overview');
+  });
+
+  it('opens « Ouvrir un fichier » with Shift tapped twice, as IntelliJ, but not with Shift held for a key', () => {
+    fakeBackend();
+    const ev = (type: string, key: string, over: KeyboardEventInit = {}) => new KeyboardEvent(type, { key, ...over });
+    const tap = (at: number) => {
+      doubleShift(ev('keydown', 'Shift'), at);
+      return doubleShift(ev('keyup', 'Shift'), at + 50);
+    };
+    expect(tap(0)).toBe(false);
+    expect(tap(1000)).toBe(false);
+    expect(app.modal).toBeNull();
+    expect(tap(1200)).toBe(true);
+    expect(app.modal).toEqual({ kind: 'quickOpen', projectId: 'p1', source: 'project' });
+    app.modal = null;
+    // A capital typed between the two: Shift was held for it.
+    tap(5000);
+    doubleShift(ev('keydown', 'Shift'), 5100);
+    doubleShift(ev('keydown', 'A', { shiftKey: true }), 5120);
+    expect(doubleShift(ev('keyup', 'Shift'), 5150)).toBe(false);
+    expect(tap(5200)).toBe(false);
+    expect(app.modal).toBeNull();
   });
 
   it('opens « Ouvrir un fichier » with Ctrl+P, Cmd+P on macOS, over a source that depends on what is shown', async () => {

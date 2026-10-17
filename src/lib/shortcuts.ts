@@ -118,6 +118,41 @@ function openQuickOpen() {
   app.modal = { kind: 'quickOpen', projectId: project.id, source };
 }
 
+/** Shift tapped alone twice within this long opens « Ouvrir un fichier », as IntelliJ's Search Everywhere. */
+const DOUBLE_SHIFT_MS = 400;
+let shiftDown = false;
+let shiftAlone = false;
+let lastTap = 0;
+
+/**
+ * Follows Shift's presses (keydown and keyup, from anywhere: a terminal, the code): a second tap alone soon after the
+ * first opens « Ouvrir un fichier ». Shift held for another key (a capital, Shift+Tab) is not a tap. True when it opened.
+ */
+export function doubleShift(e: KeyboardEvent, now = performance.now()): boolean {
+  if (e.type === 'keydown') {
+    if (e.key === 'Shift') {
+      if (!e.repeat) {
+        shiftDown = true;
+        shiftAlone = !(e.ctrlKey || e.metaKey || e.altKey);
+      }
+    } else {
+      shiftAlone = false;
+      lastTap = 0;
+    }
+    return false;
+  }
+  if (e.type !== 'keyup' || e.key !== 'Shift' || !shiftDown) return false;
+  shiftDown = false;
+  if (!shiftAlone) return false;
+  if (lastTap && now - lastTap <= DOUBLE_SHIFT_MS) {
+    lastTap = 0;
+    openQuickOpen();
+    return app.modal?.kind === 'quickOpen';
+  }
+  lastTap = now;
+  return false;
+}
+
 /** Runs the shortcut matching `e`. Returns true when the event was handled. */
 export function handleShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
   // Ctrl+Alt is AltGr on French keyboards (e.g. AltGr+2 = ~): never a shortcut.
