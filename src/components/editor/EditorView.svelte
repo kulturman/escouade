@@ -6,12 +6,14 @@
   import { lineChanges, type LineChanges } from '../../lib/editor/changes';
   import type { Comparison } from '../../lib/editor/compare';
   import { newFileError, newFilePath, renameError, type EntryKind, type Names } from '../../lib/editor/create';
-  import { definitionResolver } from '../../lib/editor/definitions';
+  import { definitionResolver, implementationsPattern } from '../../lib/editor/definitions';
   import type { NavFollowed, NavFrom, NavTarget } from '../../lib/editor/goto';
   import { navHistory, type NavEntry } from '../../lib/editor/history';
   import { detectIndent } from '../../lib/editor/indent';
   import { languageLabel, loadLanguage } from '../../lib/editor/languages';
-  import Markdown from '../conv/Markdown.svelte';
+  import MarkdownPreview from './MarkdownPreview.svelte';
+  import { editorFont } from '../../lib/editor/fontsize.svelte';
+  import { primaryKey } from '../../lib/platform';
   import { readTreeWidth, TREE_DEFAULT, TREE_MIN, treeMax, writeTreeWidth } from '../../lib/editor/layout';
   import { DEFAULT_ALIASES, fileSet, linkResolvers, parseAliases, type Aliases } from '../../lib/editor/links';
   import { setEditorJump } from '../../lib/editor/quick-open';
@@ -58,10 +60,25 @@
   const activeKey = $derived(activePath ? buffers.key(project.id, source, activePath) : null);
   const buf = $derived(activeKey ? buffers.all[activeKey] : undefined);
   const dirty = $derived(buffers.isDirty(buf));
-  /** A Markdown file shown rendered (« Aperçu ») rather than as text, file by file. */
+  /** A Markdown file opens rendered (« Aperçu »); « Texte » shows it as text, file by file. */
   let previews = $state<Record<string, boolean>>({});
   const isMarkdown = $derived(!!activePath && /\.(md|markdown)$/i.test(activePath));
-  const previewing = $derived(isMarkdown && !!buf && !!previews[buf.key]);
+  const previewing = $derived(isMarkdown && !!buf && (previews[buf.key] ?? true));
+
+  // A line asked for in a Markdown file (a search result, a definition) is shown in its text.
+  $effect(() => {
+    const key = buf?.key;
+    // Not line 1 alone: « Ouvrir un fichier » puts the cursor at the top of any file it opens.
+    const asked = reveal && (reveal.line > 1 || reveal.col);
+    if (asked && isMarkdown && key && previews[key] !== false) previews[key] = false;
+  });
+
+  // Ctrl+wheel (Cmd on macOS) over the editor changes the size of its text, as IntelliJ's option.
+  function wheelZoom(e: WheelEvent) {
+    if (!primaryKey(e) || e.deltaY === 0) return;
+    e.preventDefault();
+    editorFont.step(e.deltaY < 0 ? 1 : -1);
+  }
 
   let status = $state<Record<string, FileStatus>>({});
   let cursor = $state({ line: 1, col: 1 });
@@ -674,6 +691,41 @@
     showSearch();
   }
 
+  // Ctrl+Alt+B: the classes that implement or extend `name`, as a search of the source.
+  function implementations(name: string) {
+    search.ask({ text: implementationsPattern(name), wholeWord: false, caseSensitive: true, regex: true });
+    showSearch();
+  }
+
+  /** Closes the tabs of `paths` at once, each unsaved file asked about first (cancelled: none is closed). */
+  function closeTabs(paths: string[]) {
+    const src = source;
+    const pid = project.id;
+    const unsaved = paths.filter((p) => buffers.isDirty(buffers.all[buffers.key(pid, src, p)]));
+    askToSave(pid, src, unsaved, () => {
+      for (const p of paths) {
+        buffers.close(buffers.key(pid, src, p));
+        app.closeEditorTab(pid, src, p);
+      }
+    });
+  }
+
+  // A tab's context menu: it, the others, those on its left or right, or all of them.
+  function tabMenu(e: MouseEvent, path: string) {
+    const open = tabs.map((tab) => tab.path);
+    const i = open.indexOf(path);
+    const left = open.slice(0, i);
+    const right = open.slice(i + 1);
+    menu.show(e, [
+      { label: t('editor.tabs.menu.close'), onClick: () => closeTab(path) },
+      { label: t('editor.tabs.menu.others'), disabled: open.length < 2, onClick: () => closeTabs([...left, ...right]) },
+      { label: t('editor.tabs.menu.left'), disabled: !left.length, onClick: () => closeTabs(left) },
+      { label: t('editor.tabs.menu.right'), disabled: !right.length, onClick: () => closeTabs(right) },
+      { label: '', separator: true },
+      { label: t('editor.tabs.menu.all'), onClick: () => closeTabs(open) },
+    ]);
+  }
+
   function closeTab(path: string) {
     // The source now: the prompt may stay up while the view moves to another one.
     const src = source;
@@ -872,8 +924,8 @@
       onresize={(w) => (treeWidth = w)}
       oncommit={writeTreeWidth}
     />
-    <section class="pane">
-      <EditorTabs {tabs} onselect={(p) => app.openEditor({ projectId: project.id, source, path: p })} onclose={closeTab} />
+    <section class="pane" onwheel={wheelZoom}>
+      <EditorTabs {tabs} onselect={(p) => app.openEditor({ projectId: project.id, source, path: p })} onclose={closeTab} onmenu={tabMenu} />
       {#if !activePath}
         <div class="empty">{t('editor.empty.selectFile')}</div>
       {:else}
@@ -920,7 +972,7 @@
           <div class="empty">{buf.error}</div>
         {:else}
           {#if previewing}
-            <div class="preview"><Markdown text={buf.text} /></div>
+            <MarkdownPreview text={buf.text} />
           {:else}
             <CodeEditor
               bind:this={code}
@@ -941,6 +993,7 @@
               onback={() => travel(true)}
               onforward={() => travel(false)}
               onreferences={references}
+              onimplementations={implementations}
             />
           {/if}
           {#if picking}
@@ -1189,12 +1242,6 @@
     justify-content: center;
     color: var(--muted);
     font-size: 13px;
-  }
-  .preview {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: 20px 28px;
   }
   .preview-toggle {
     height: 20px;

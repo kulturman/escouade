@@ -88,6 +88,13 @@ export default defineZone('editor', {
     missing: 'This file doesn’t exist (or no longer exists).',
   },
 
+  preview: {
+    find: 'Find in preview',
+    count: '{current}/{total}',
+    none: 'No results',
+    close: 'Close search',
+  },
+
   status: {
     position: 'Ln {line}, Col {col}',
     tabs: 'Tabs',
@@ -101,6 +108,13 @@ export default defineZone('editor', {
     close: 'Close {name}',
     closeIn: 'Close {name} · {folder}',
     closeUnsaved: 'Close (unsaved)',
+    menu: {
+      close: 'Close',
+      others: 'Close other tabs',
+      left: 'Close tabs to the left',
+      right: 'Close tabs to the right',
+      all: 'Close all tabs',
+    },
   },
 
   newField: {

@@ -1,5 +1,6 @@
 // Global keyboard shortcuts, routed in one place.
 
+import { fontSizeKey } from './editor/fontsize.svelte';
 import { findInFiles } from './editor/search.svelte';
 import { IS_MAC, primaryKey } from './platform';
 import { app } from './state.svelte';
@@ -138,6 +139,12 @@ export function handleShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
   const k = e.key.toLowerCase();
   if (k === 's' && !e.shiftKey && app.editorOn) {
     import('./editor/actions').then((m) => m.saveActive());
+    return true;
+  }
+  // The size of the editor's text (Ctrl+Shift+. / Ctrl+Shift+, as IntelliJ, Ctrl+= / Ctrl+- / Ctrl+0).
+  const zoom = app.editorOn ? fontSizeKey(e) : null;
+  if (zoom) {
+    zoom();
     return true;
   }
   // The editor's search through the files of its source; Ctrl+F stays the search in the file.

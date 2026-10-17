@@ -39,7 +39,7 @@ const highlight = HighlightStyle.define([
 export const editorTheme = [
   EditorView.theme(
     {
-      '&': { height: '100%', backgroundColor: 'var(--term)', color: C.txt, fontSize: '12.5px' },
+      '&': { height: '100%', backgroundColor: 'var(--term)', color: C.txt, fontSize: 'var(--editor-font, 12.5px)' },
       '.cm-scroller': { fontFamily: 'var(--mono)', lineHeight: '20px' },
       '.cm-content': { caretColor: 'var(--accent)', padding: '12px 0 60px' },
       '&.cm-focused .cm-cursor': { borderLeftColor: 'var(--accent)' },

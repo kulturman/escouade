@@ -43,6 +43,7 @@
     onback,
     onforward,
     onreferences,
+    onimplementations,
   }: {
     docKey: string;
     text: string;
@@ -69,6 +70,8 @@
     onforward?: () => void;
     /** Maj+F12 on an identifier: its uses are looked for. */
     onreferences?: (name: string) => void;
+    /** Ctrl+Alt+B on an identifier: the classes that implement or extend it are looked for. */
+    onimplementations?: (name: string) => void;
   } = $props();
 
   let host: HTMLDivElement;
@@ -114,6 +117,7 @@
           onBack: () => onback?.(),
           onForward: () => onforward?.(),
           onReferences: (name) => onreferences?.(name),
+          onImplementations: (name) => onimplementations?.(name),
         }),
         changeGutter(),
         lineNumbers(),

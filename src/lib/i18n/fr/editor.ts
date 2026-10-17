@@ -102,6 +102,14 @@ export default {
   },
 
   /** The status bar under the text (the encoding and the end of lines are written the same in every language). */
+  /** The search of a Markdown file's « Aperçu » (Ctrl+F there). */
+  preview: {
+    find: 'Chercher dans l’aperçu',
+    count: '{current}/{total}',
+    none: 'Aucun résultat',
+    close: 'Fermer la recherche',
+  },
+
   status: {
     position: 'Ln {line}, Col {col}',
     tabs: 'Tabulations',
@@ -117,6 +125,14 @@ export default {
     /** `folder` tells two tabs of the same name apart. */
     closeIn: 'Fermer {name} · {folder}',
     closeUnsaved: 'Fermer (non enregistré)',
+    /** The context menu of a tab. */
+    menu: {
+      close: 'Fermer',
+      others: 'Fermer les autres onglets',
+      left: 'Fermer les onglets à gauche',
+      right: 'Fermer les onglets à droite',
+      all: 'Fermer tous les onglets',
+    },
   },
 
   /** The field naming a new file or folder, and renaming one, in the tree. */

@@ -8,10 +8,13 @@
     tabs,
     onselect,
     onclose,
+    onmenu,
   }: {
     tabs: { path: string; name: string; dirty: boolean; status: FileStatus | null; active: boolean }[];
     onselect: (path: string) => void;
     onclose: (path: string) => void;
+    /** Right click on a tab: its context menu. */
+    onmenu?: (e: MouseEvent, path: string) => void;
   } = $props();
 
   const SC: Record<string, string> = { M: 'var(--wait)', A: 'var(--add)', D: 'var(--del)' };
@@ -32,6 +35,11 @@
       onclick={() => onselect(tab.path)}
       onkeydown={(e) => e.target === e.currentTarget && e.key === 'Enter' && onselect(tab.path)}
       onauxclick={(e) => e.button === 1 && onclose(tab.path)}
+      oncontextmenu={(e) => {
+        if (!onmenu) return;
+        e.preventDefault();
+        onmenu(e, tab.path);
+      }}
     >
       <span class="label"
         ><span class="name" style:color={tab.status ? SC[tab.status] : undefined}>{tab.name}</span>{#if hint}<span class="hint"

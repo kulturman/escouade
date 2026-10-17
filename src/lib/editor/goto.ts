@@ -101,6 +101,8 @@ export interface GotoOptions {
   onForward?: () => void;
   /** Maj+F12: the identifier at the cursor, whose uses are looked for (by their text: in a comment too). */
   onReferences?: (name: string) => void;
+  /** Ctrl+Alt+B (Cmd+Alt+B on macOS), as IntelliJ: the identifier at the cursor, whose implementations are looked for. */
+  onImplementations?: (name: string) => void;
   mac?: boolean;
 }
 
@@ -255,6 +257,14 @@ export function gotoExtension(o: GotoOptions): Extension {
             const id = nameAt(view.state, view.state.selection.main.head);
             if (id) o.onReferences?.(id.name);
             return !!o.onReferences;
+          },
+        },
+        {
+          key: 'Mod-Alt-b',
+          run: (view) => {
+            const id = nameAt(view.state, view.state.selection.main.head);
+            if (id) o.onImplementations?.(id.name);
+            return !!o.onImplementations;
           },
         },
         { key: mac ? 'Ctrl--' : 'Alt-ArrowLeft', run: run(o.onBack) },
