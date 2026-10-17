@@ -1,6 +1,6 @@
 import { undoDepth } from '@codemirror/commands';
 import { EditorView as CodeMirror } from '@codemirror/view';
-import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buffers } from '../../lib/editor/buffers.svelte';
@@ -103,6 +103,28 @@ describe('EditorView', () => {
     render(EditorView, { project: project() });
     expect(await screen.findByText('TypeScript')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Aperçu' })).toBeNull();
+  });
+
+  it('closes the tabs on the left, the others or all of them from a tab’s context menu', async () => {
+    backend();
+    await app.openEditor({ source: 'project', path: 'README.md' });
+    await app.openEditor({ source: 'project', path: 'src/app.ts' });
+    render(EditorView, { project: project() });
+    const items = async (name: RegExp) => {
+      await fireEvent.contextMenu(await screen.findByRole('tab', { name }));
+      return Object.fromEntries(menu.open!.items.filter((i) => !i.separator).map((i) => [i.label, i]));
+    };
+    let m = await items(/README\.md/);
+    expect(m['Fermer les onglets à gauche'].disabled).toBe(true);
+    expect(m['Fermer les onglets à droite'].disabled).toBe(false);
+    m = await items(/app\.ts/);
+    m['Fermer les onglets à gauche'].onClick!();
+    await waitFor(() => expect(screen.queryByRole('tab', { name: /README\.md/ })).toBeNull());
+    expect(screen.getByRole('tab', { name: /app\.ts/ })).toBeInTheDocument();
+    m = await items(/app\.ts/);
+    expect(m['Fermer les autres onglets'].disabled).toBe(true);
+    m['Fermer tous les onglets'].onClick!();
+    await waitFor(() => expect(screen.queryByRole('tab')).toBeNull());
   });
 
   it('saves what was typed', async () => {

@@ -125,6 +125,14 @@ export default {
     /** `folder` tells two tabs of the same name apart. */
     closeIn: 'Fermer {name} · {folder}',
     closeUnsaved: 'Fermer (non enregistré)',
+    /** The context menu of a tab. */
+    menu: {
+      close: 'Fermer',
+      others: 'Fermer les autres onglets',
+      left: 'Fermer les onglets à gauche',
+      right: 'Fermer les onglets à droite',
+      all: 'Fermer tous les onglets',
+    },
   },
 
   /** The field naming a new file or folder, and renaming one, in the tree. */

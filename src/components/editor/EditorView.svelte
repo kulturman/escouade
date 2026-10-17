@@ -697,6 +697,35 @@
     showSearch();
   }
 
+  /** Closes the tabs of `paths` at once, each unsaved file asked about first (cancelled: none is closed). */
+  function closeTabs(paths: string[]) {
+    const src = source;
+    const pid = project.id;
+    const unsaved = paths.filter((p) => buffers.isDirty(buffers.all[buffers.key(pid, src, p)]));
+    askToSave(pid, src, unsaved, () => {
+      for (const p of paths) {
+        buffers.close(buffers.key(pid, src, p));
+        app.closeEditorTab(pid, src, p);
+      }
+    });
+  }
+
+  // A tab's context menu: it, the others, those on its left or right, or all of them.
+  function tabMenu(e: MouseEvent, path: string) {
+    const open = tabs.map((tab) => tab.path);
+    const i = open.indexOf(path);
+    const left = open.slice(0, i);
+    const right = open.slice(i + 1);
+    menu.show(e, [
+      { label: t('editor.tabs.menu.close'), onClick: () => closeTab(path) },
+      { label: t('editor.tabs.menu.others'), disabled: open.length < 2, onClick: () => closeTabs([...left, ...right]) },
+      { label: t('editor.tabs.menu.left'), disabled: !left.length, onClick: () => closeTabs(left) },
+      { label: t('editor.tabs.menu.right'), disabled: !right.length, onClick: () => closeTabs(right) },
+      { label: '', separator: true },
+      { label: t('editor.tabs.menu.all'), onClick: () => closeTabs(open) },
+    ]);
+  }
+
   function closeTab(path: string) {
     // The source now: the prompt may stay up while the view moves to another one.
     const src = source;
@@ -896,7 +925,7 @@
       oncommit={writeTreeWidth}
     />
     <section class="pane" onwheel={wheelZoom}>
-      <EditorTabs {tabs} onselect={(p) => app.openEditor({ projectId: project.id, source, path: p })} onclose={closeTab} />
+      <EditorTabs {tabs} onselect={(p) => app.openEditor({ projectId: project.id, source, path: p })} onclose={closeTab} onmenu={tabMenu} />
       {#if !activePath}
         <div class="empty">{t('editor.empty.selectFile')}</div>
       {:else}

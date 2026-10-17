@@ -108,6 +108,13 @@ export default defineZone('editor', {
     close: 'Close {name}',
     closeIn: 'Close {name} · {folder}',
     closeUnsaved: 'Close (unsaved)',
+    menu: {
+      close: 'Close',
+      others: 'Close other tabs',
+      left: 'Close tabs to the left',
+      right: 'Close tabs to the right',
+      all: 'Close all tabs',
+    },
   },
 
   newField: {
