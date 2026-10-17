@@ -6,7 +6,7 @@
   import { lineChanges, type LineChanges } from '../../lib/editor/changes';
   import type { Comparison } from '../../lib/editor/compare';
   import { newFileError, newFilePath, renameError, type EntryKind, type Names } from '../../lib/editor/create';
-  import { definitionResolver } from '../../lib/editor/definitions';
+  import { definitionResolver, implementationsPattern } from '../../lib/editor/definitions';
   import type { NavFollowed, NavFrom, NavTarget } from '../../lib/editor/goto';
   import { navHistory, type NavEntry } from '../../lib/editor/history';
   import { detectIndent } from '../../lib/editor/indent';
@@ -691,6 +691,12 @@
     showSearch();
   }
 
+  // Ctrl+Alt+B: the classes that implement or extend `name`, as a search of the source.
+  function implementations(name: string) {
+    search.ask({ text: implementationsPattern(name), wholeWord: false, caseSensitive: true, regex: true });
+    showSearch();
+  }
+
   function closeTab(path: string) {
     // The source now: the prompt may stay up while the view moves to another one.
     const src = source;
@@ -958,6 +964,7 @@
               onback={() => travel(true)}
               onforward={() => travel(false)}
               onreferences={references}
+              onimplementations={implementations}
             />
           {/if}
           {#if picking}

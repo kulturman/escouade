@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { definitionPattern } from './definitions';
+import { definitionPattern, implementationsPattern } from './definitions';
 import { jvmImportTargets, phpUseTargets } from './links';
 
 const defines = (path: string, name: string, line: string) => definitionPattern(path, name).test(line);
@@ -57,5 +57,24 @@ describe('the imports of Java, Kotlin and PHP', () => {
     expect(phpUseTargets('App\\Http\\Controllers\\UserController', files)).toEqual(['app/Http/Controllers/UserController.php']);
     expect(phpUseTargets('Illuminate\\Http\\Request', files)).toEqual(['vendor/laravel/framework/src/Illuminate/Http/Request.php']);
     expect(phpUseTargets('Other\\Thing', files)).toEqual([]);
+  });
+});
+
+describe('the implementations of a type', () => {
+  const impl = (line: string, name = 'UserRepo') => new RegExp(implementationsPattern(name)).test(line);
+
+  it('finds the classes that implement or extend it, in Java, TypeScript, PHP, Kotlin and C#', () => {
+    expect(impl('public class JpaUserRepo implements UserRepo, Closeable {')).toBe(true);
+    expect(impl('public interface AdminRepo extends UserRepo {')).toBe(true);
+    expect(impl('export class MemoryUserRepo implements UserRepo {')).toBe(true);
+    expect(impl('final class EloquentUserRepo extends Base implements UserRepo')).toBe(true);
+    expect(impl('class KtUserRepo(private val db: Db) : UserRepo {')).toBe(true);
+    expect(impl('public sealed class SqlUserRepo : IDisposable, UserRepo')).toBe(true);
+  });
+
+  it('leaves its uses and the names that only contain it', () => {
+    expect(impl('  private final UserRepo repo;')).toBe(false);
+    expect(impl('constructor(private repo: UserRepo) {}')).toBe(false);
+    expect(impl('public class X implements UserRepository {')).toBe(false);
   });
 });

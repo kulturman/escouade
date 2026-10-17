@@ -78,6 +78,15 @@ function gitPattern(template: string, name: string): string {
     .join(escapeRegExp(name));
 }
 
+/**
+ * What looks for the implementations of the type `name` in the source (a regular expression of the search, one line):
+ * `implements` or `extends` it (Java, TypeScript, PHP), a class whose supertypes after `:` name it (Kotlin, C#).
+ */
+export function implementationsPattern(name: string): string {
+  const n = escapeRegExp(name);
+  return String.raw`\b(implements|extends)\b[^{;]*\b${n}\b|\bclass\s+[A-Za-z0-9_]+[^{;]*:[^{;]*\b${n}\b`;
+}
+
 /** What `searched` takes for a definition of `name` in a file like `path`, as JavaScript reads it (the tests). */
 export function definitionPattern(path: string, name: string): RegExp {
   return exactPattern(DEFINES[familyOf(path)] ?? DEFINES_ELSE, name);
