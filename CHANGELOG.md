@@ -15,6 +15,7 @@ Escouade K, le fork de kulturman, part d'Escouade 1.7.9 : sa 2.0.0 reprend tout 
 
 ### Corrections
 
+- Une version de développement d'Escouade K ne se remplace plus d'elle-même par la dernière release (plus ancienne que son code) : elle peut proposer la mise à jour, jamais l'installer seule.
 - La dictée ne risque plus de faire planter l'app sur un Mac plus ancien que celui qui l'a compilée : whisper.cpp est compilé pour tout Mac Apple Silicon et tout Mac Intel avec AVX2, plus pour le processeur de la machine de build.
 
 ## [2.0.0] — 2026-10-16
