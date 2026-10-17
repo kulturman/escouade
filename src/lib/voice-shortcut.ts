@@ -1,6 +1,7 @@
 // The dictation's shortcut, chosen in Réglages › Application › Dictée: written as the app writes its shortcuts
-// (`Ctrl+Shift+M`, Ctrl being Cmd on macOS; `keyLabel` shows it), read from the key's place on the keyboard
-// (`KeyboardEvent.code`), so that it holds whatever the layout (AZERTY) and whatever Alt makes of the letter.
+// (`Ctrl+Shift+M`, Ctrl being Cmd on macOS; `keyLabel` shows it). Its letter is the one the key types in the user's
+// layout (on AZERTY, M is where QWERTY has `;`, its `code` is `Semicolon`); the key's place (`KeyboardEvent.code`)
+// only when Alt turns the letter into another character (`⌥M` types `µ` on macOS).
 
 import { primaryKey } from './platform';
 
@@ -17,8 +18,7 @@ function keyOf(code: string): string | null {
  * dictation cannot take, or neither Ctrl (Cmd) nor Alt held (a letter alone is typed, not a shortcut).
  */
 export function comboOf(e: KeyboardEvent, mac?: boolean): string | null {
-  // An event without its key's place (made by a script): its letter.
-  const key = e.code ? keyOf(e.code) : /^[a-z0-9]$/i.test(e.key) ? e.key.toUpperCase() : e.key === ' ' ? 'Space' : null;
+  const key = /^[a-z]$/i.test(e.key) ? e.key.toUpperCase() : (keyOf(e.code) ?? (e.key === ' ' ? 'Space' : null));
   const ctrl = primaryKey(e, mac);
   if (!key || (!ctrl && !e.altKey)) return null;
   return [ctrl && 'Ctrl', e.shiftKey && 'Shift', e.altKey && 'Alt', key].filter(Boolean).join('+');

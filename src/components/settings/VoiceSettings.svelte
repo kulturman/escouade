@@ -32,7 +32,13 @@
   }
 
   // « Raccourci »: a click, then the keys pressed; Escape gives up, a key that cannot be a shortcut waits for another.
+  // Read on the whole window, before anything else: WebKit gives no focus to a button clicked.
   let recording = $state(false);
+  $effect(() => {
+    if (!recording) return;
+    window.addEventListener('keydown', onShortcutKey, true);
+    return () => window.removeEventListener('keydown', onShortcutKey, true);
+  });
   function onShortcutKey(e: KeyboardEvent) {
     if (!recording) return;
     e.preventDefault();
@@ -81,12 +87,7 @@
     </div>
   </Row>
   <Row label={t('voice.settings.shortcut')} desc={t('voice.settings.shortcutDesc')}>
-    <button
-      class="btn"
-      aria-pressed={recording}
-      onclick={() => (recording = !recording)}
-      onkeydown={onShortcutKey}
-      onblur={() => (recording = false)}
+    <button class="btn" aria-pressed={recording} onclick={() => (recording = !recording)}
       >{recording ? t('voice.settings.shortcutRecording') : keyLabel(s.voiceShortcut || DEFAULT_VOICE_SHORTCUT)}</button
     >
     {#if (s.voiceShortcut || DEFAULT_VOICE_SHORTCUT) !== DEFAULT_VOICE_SHORTCUT}

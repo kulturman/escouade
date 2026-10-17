@@ -8,7 +8,7 @@ Escouade K, le fork de kulturman, part d'Escouade 1.7.9 : sa 2.0.0 reprend tout 
 
 ### Ajouts
 
-- Le raccourci de la dictée se choisit dans Réglages › Application › Dictée : un clic sur « Raccourci », puis la combinaison voulue, avec `⌘` (`Ctrl`) ou `⌥` (`Alt`) ; « Par défaut » revient à `⌘⇧M`. Il est reconnu par la place des touches, quel que soit le clavier (AZERTY). Le raccourci arrête aussi une dictée en cours quand une fenêtre est ouverte par-dessus.
+- Le raccourci de la dictée se choisit dans Réglages › Application › Dictée : un clic sur « Raccourci », puis la combinaison voulue, avec `⌘` (`Ctrl`) ou `⌥` (`Alt`) ; « Par défaut » revient à `⌘⇧M`. Il suit les lettres de ton clavier, AZERTY compris. Le raccourci arrête aussi une dictée en cours quand une fenêtre est ouverte par-dessus.
 - La dictée transcrit sur la puce graphique du Mac (Metal), nettement plus vite, surtout avec les gros modèles.
 - Escouade K a son logo : la tuile d'Escouade en violet, son chevron, et un K à la place de l'étoile. Il se distingue d'Escouade dans le Dock, le sélecteur d'apps et la barre de titre.
 - `Maj` pressée deux fois de suite, comme dans IntelliJ, ouvre « Ouvrir un fichier » (comme `⌘P`), depuis l'éditeur, la conversation ou un terminal. `Maj` tenue pour une majuscule ou un raccourci ne compte pas.

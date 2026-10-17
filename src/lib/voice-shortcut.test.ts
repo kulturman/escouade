@@ -4,9 +4,12 @@ import { comboOf, isVoiceShortcut } from './voice-shortcut';
 const press = (init: KeyboardEventInit) => new KeyboardEvent('keydown', init);
 
 describe('the dictation’s shortcut', () => {
-  it('is read from the key’s place: Cmd on macOS, Ctrl elsewhere, whatever the layout or Alt makes of the letter', () => {
-    // AZERTY: the key of M is where QWERTY has `;`, its code is still KeyM.
+  it('takes the letter the key types in the layout, its place when Alt changes it: Cmd on macOS, Ctrl elsewhere', () => {
+    // AZERTY: M is where QWERTY has `;` (what macOS's WebKit gave for Cmd+Shift+M).
+    expect(comboOf(press({ key: 'M', code: 'Semicolon', metaKey: true, shiftKey: true }), true)).toBe('Ctrl+Shift+M');
     expect(comboOf(press({ key: 'M', code: 'KeyM', metaKey: true, shiftKey: true }), true)).toBe('Ctrl+Shift+M');
+    // AZERTY: A is where QWERTY has Q.
+    expect(comboOf(press({ key: 'a', code: 'KeyQ', metaKey: true }), true)).toBe('Ctrl+A');
     expect(comboOf(press({ key: 'M', code: 'KeyM', ctrlKey: true, shiftKey: true }), false)).toBe('Ctrl+Shift+M');
     expect(comboOf(press({ key: 'µ', code: 'KeyM', altKey: true }), true)).toBe('Alt+M');
     expect(comboOf(press({ key: ' ', code: 'Space', metaKey: true, shiftKey: true }), true)).toBe('Ctrl+Shift+Space');
