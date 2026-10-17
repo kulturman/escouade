@@ -355,7 +355,7 @@ describe('App layout', () => {
     it('is held back from the code, where it also opens the palette', async () => {
       const { container } = start('', { handlers: FILES });
       expect(await screen.findByRole('main')).toBeInTheDocument();
-      await app.openEditor({ source: 'project', path: 'README.md' });
+      await app.openEditor({ source: 'project', path: 'src/app.ts' });
       await waitFor(() => expect(container.querySelector('.cm-content')).not.toBeNull());
       const code = container.querySelector('.cm-content')!;
       expect(press(code, true)).toBe(true);
