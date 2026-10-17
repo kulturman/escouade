@@ -10,6 +10,7 @@
   import { keyLabel } from '../../lib/platform';
   import { comboOf, DEFAULT_VOICE_SHORTCUT } from '../../lib/voice-shortcut';
   import Group from './Group.svelte';
+  import Switch from './Switch.svelte';
   import Row from './Row.svelte';
 
   // « Dictée »: the model chosen goes with the other settings (« Enregistrer »); downloading and deleting a model act at
@@ -93,6 +94,9 @@
     {#if (s.voiceShortcut || DEFAULT_VOICE_SHORTCUT) !== DEFAULT_VOICE_SHORTCUT}
       <button class="btn ghost" onclick={() => (s.voiceShortcut = DEFAULT_VOICE_SHORTCUT)}>{t('voice.settings.shortcutDefault')}</button>
     {/if}
+  </Row>
+  <Row label={t('voice.settings.holdAlt')} desc={t('voice.settings.holdAltDesc')}>
+    <Switch label={t('voice.settings.holdAlt')} bind:on={s.voiceHoldAlt} />
   </Row>
   <Row label={t('voice.settings.language')} desc={t('voice.settings.languageDesc')}>
     <select class="field select" aria-label={t('voice.settings.language')} bind:value={s.voiceLanguage}>

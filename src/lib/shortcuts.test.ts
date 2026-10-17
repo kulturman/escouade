@@ -2,7 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agent, fakeBackend, project, resetApp } from '../test/ipc';
 import { buffers } from './editor/buffers.svelte';
 import { setFindInFiles } from './editor/search.svelte';
-import { answersHere, ariaEnter, doubleShift, enterAnswer, handleShortcut, holdPrint, isAppShortcut, optionAnswer } from './shortcuts';
+import {
+  answersHere,
+  ariaEnter,
+  doubleShift,
+  enterAnswer,
+  handleShortcut,
+  HOLD_ALT_MS,
+  holdPrint,
+  holdToTalk,
+  isAppShortcut,
+  optionAnswer,
+} from './shortcuts';
 import { app } from './state.svelte';
 import { voice } from './voice.svelte';
 
@@ -99,6 +110,50 @@ describe('handleShortcut', () => {
     expect(handleShortcut(key('A', { shiftKey: true }), true)).toBe(false);
     expect(handleShortcut(new KeyboardEvent('keydown', { key: 'a', metaKey: true, shiftKey: true }), true)).toBe(true);
     expect(app.ui.view).toBe('overview');
+  });
+
+  it('listens while Option is held alone, transcribes when it is let go, and leaves a tap or ⌥+key alone', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeBackend();
+      const start = vi.spyOn(voice, 'start').mockResolvedValue();
+      const stop = vi.spyOn(voice, 'stop').mockResolvedValue();
+      const cancel = vi.spyOn(voice, 'cancel').mockResolvedValue();
+      const ev = (type: string, key: string, over: KeyboardEventInit = {}) => new KeyboardEvent(type, { key, ...over });
+      // Held: it listens for the agent on screen; let go: it transcribes.
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      await vi.advanceTimersByTimeAsync(HOLD_ALT_MS + 10);
+      expect(start).toHaveBeenCalledWith({ kind: 'composer', agentId: 'a1' });
+      holdToTalk(ev('keyup', 'Alt'));
+      await vi.runAllTimersAsync();
+      expect(stop).toHaveBeenCalledTimes(1);
+      // A tap: nothing.
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      await vi.advanceTimersByTimeAsync(100);
+      holdToTalk(ev('keyup', 'Alt'));
+      await vi.runAllTimersAsync();
+      expect(start).toHaveBeenCalledTimes(1);
+      // ⌥é: the key comes before the dictation would; once it listens, another key gives it up.
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      holdToTalk(ev('keydown', 'é', { altKey: true }));
+      await vi.runAllTimersAsync();
+      expect(start).toHaveBeenCalledTimes(1);
+      holdToTalk(ev('keyup', 'Alt'));
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      await vi.advanceTimersByTimeAsync(HOLD_ALT_MS + 10);
+      holdToTalk(ev('keydown', '(', { altKey: true }));
+      await vi.runAllTimersAsync();
+      expect(cancel).toHaveBeenCalledTimes(1);
+      holdToTalk(ev('keyup', 'Alt'));
+      // Turned off in the settings: nothing.
+      app.settings = { ...app.settings, voiceHoldAlt: false };
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      await vi.runAllTimersAsync();
+      holdToTalk(ev('keyup', 'Alt'));
+      expect(start).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens « Ouvrir un fichier » with Shift tapped twice, as IntelliJ, but not with Shift held for a key', () => {

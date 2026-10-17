@@ -81,6 +81,8 @@ pub struct Settings {
     pub voice_language: String,
     /// « Dictée › Raccourci »: as the app writes its shortcuts (`Ctrl+Shift+M`, Cmd on macOS).
     pub voice_shortcut: String,
+    /// « Dictée › Maintenir ⌥ pour parler »: Alt (Option) held alone listens, let go transcribes.
+    pub voice_hold_alt: bool,
     /// « Remote control pour tous les agents »: every agent, those of tickets too, is reachable
     /// from claude.ai (`AgentMeta::remote_control`, `RemoteSource::Global`).
     pub remote_control_all: bool,
@@ -276,6 +278,7 @@ impl Default for Settings {
             voice_model: crate::voice::models::DEFAULT_MODEL.into(),
             voice_language: "ui".into(),
             voice_shortcut: "Ctrl+Shift+M".into(),
+            voice_hold_alt: true,
             remote_control_all: false,
         }
     }
@@ -1591,6 +1594,7 @@ mod tests {
             ("small-q5_1", "ui")
         );
         assert_eq!(s.voice_shortcut, "Ctrl+Shift+M");
+        assert!(s.voice_hold_alt);
         let d = Settings::default();
         assert_eq!(
             (d.voice_model.as_str(), d.voice_language.as_str()),

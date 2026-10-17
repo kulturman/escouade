@@ -154,6 +154,45 @@ export function doubleShift(e: KeyboardEvent, now = performance.now()): boolean 
   return false;
 }
 
+/** Alt held alone this long starts the dictation: a character typed with Alt (⌥é) comes sooner. */
+export const HOLD_ALT_MS = 250;
+let holdTimer: ReturnType<typeof setTimeout> | null = null;
+/** The dictation Alt started, once its microphone is open (let go sooner, it ends then). */
+let holding: Promise<void> | null = null;
+
+/**
+ * « Maintenir ⌥ pour parler »: Alt (Option) held alone listens for the agent on screen, let go transcribes. A short tap
+ * does nothing; another key while it is held (a character, a shortcut) gives the dictation up, as it was not one.
+ * Follows keydown, keyup and the window's blur, from anywhere (captured).
+ */
+export function holdToTalk(e: KeyboardEvent | FocusEvent) {
+  const end = (cancel: boolean) => {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = null;
+    if (holding) void holding.then(() => (cancel ? voice.cancel() : voice.stop()));
+    holding = null;
+  };
+  if (e.type === 'blur') return end(false);
+  if (!(e instanceof KeyboardEvent)) return;
+  if (e.type === 'keyup') {
+    if (e.key === 'Alt') end(false);
+    return;
+  }
+  if (e.type !== 'keydown') return;
+  if (e.key !== 'Alt') {
+    if (holdTimer || holding) end(true);
+    return;
+  }
+  if (e.repeat || holdTimer || holding || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (!(app.settings?.voiceHoldAlt ?? true)) return;
+  holdTimer = setTimeout(() => {
+    holdTimer = null;
+    const a = app.agent;
+    if (!a || !app.agentOnScreen || app.modal || voice.phase !== 'idle') return;
+    holding = voice.start({ kind: a.terminal ? 'terminal' : 'composer', agentId: a.id });
+  }, HOLD_ALT_MS);
+}
+
 /** Runs the shortcut matching `e`. Returns true when the event was handled. */
 export function handleShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
   // The dictation, first: its shortcut may hold Alt, if chosen so. It stops the one under way wherever it is for, a

@@ -3,7 +3,7 @@
   import { t } from './lib/i18n';
   import { api } from './lib/ipc';
   import { app } from './lib/state.svelte';
-  import { doubleShift, handleShortcut, holdPrint } from './lib/shortcuts';
+  import { doubleShift, handleShortcut, holdPrint, holdToTalk } from './lib/shortcuts';
   import { watchForUpdates } from './lib/updater';
   import { watchPresence } from './lib/presence';
   import { createWarmer } from './lib/warm';
@@ -82,8 +82,13 @@
   onkeydowncapture={(e) => {
     holdPrint(e);
     doubleShift(e);
+    holdToTalk(e);
   }}
-  onkeyupcapture={(e) => doubleShift(e)}
+  onkeyupcapture={(e) => {
+    doubleShift(e);
+    holdToTalk(e);
+  }}
+  onblur={(e) => holdToTalk(e)}
   onkeydown={onKeydown}
   onfocus={() => app.markSeen()}
 />
