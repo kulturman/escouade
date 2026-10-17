@@ -8,8 +8,13 @@ Escouade K, le fork de kulturman, part d'Escouade 1.7.9 : sa 2.0.0 reprend tout 
 
 ### Ajouts
 
+- La dictée transcrit sur la puce graphique du Mac (Metal), nettement plus vite, surtout avec les gros modèles.
 - Escouade K a son logo : la tuile d'Escouade en violet, son chevron, et un K à la place de l'étoile. Il se distingue d'Escouade dans le Dock, le sélecteur d'apps et la barre de titre.
 - `Maj` pressée deux fois de suite, comme dans IntelliJ, ouvre « Ouvrir un fichier » (comme `⌘P`), depuis l'éditeur, la conversation ou un terminal. `Maj` tenue pour une majuscule ou un raccourci ne compte pas.
+
+### Corrections
+
+- La dictée ne risque plus de faire planter l'app sur un Mac plus ancien que celui qui l'a compilée : whisper.cpp est compilé pour tout Mac Apple Silicon et tout Mac Intel avec AVX2, plus pour le processeur de la machine de build.
 
 ## [2.0.0] — 2026-10-16
 
