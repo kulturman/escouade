@@ -5,6 +5,8 @@ export default defineZone('nav', {
   sidebar: {
     status: { running: 'Running', waiting: 'Question', idle: 'Ready', done: 'Done', error: 'Error' },
     viewLabel: 'Project view',
+    hide: 'Collapse the sidebar ({key})',
+    show: 'Expand the sidebar ({key})',
     toReview: '{count} to review',
     newAgent: 'New agent',
     newAgentTitle: 'New agent ({shortcut})',

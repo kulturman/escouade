@@ -11,6 +11,9 @@
   import { navHistory, type NavEntry } from '../../lib/editor/history';
   import { detectIndent } from '../../lib/editor/indent';
   import { languageLabel, loadLanguage } from '../../lib/editor/languages';
+  import FoldButton from '../FoldButton.svelte';
+  import Rail from '../Rail.svelte';
+  import { panels } from '../../lib/panels.svelte';
   import MarkdownPreview from './MarkdownPreview.svelte';
   import { editorFont } from '../../lib/editor/fontsize.svelte';
   import { primaryKey } from '../../lib/platform';
@@ -795,135 +798,141 @@
   <div class="body" use:observeWidth={(w) => (area = w)}>
     <!-- The left column: the files' tree or the search, both kept to find them again as they were. Not `.side`, the
          sidebar's class: one locator must not find both. -->
-    <aside class="editor-side" style:width="{treeShown}px">
-      <div class="views">
-        <div class="segmented" role="group" aria-label={t('editor.side.viewLabel')}>
-          <button
-            class:on={!search.shown}
-            aria-pressed={!search.shown}
-            aria-label={t('common.files')}
-            use:tip={t('common.files')}
-            onclick={() => (search.shown = false)}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
-              ><path d="M9 2.5H5A1.5 1.5 0 0 0 3.5 4v8A1.5 1.5 0 0 0 5 13.5h6a1.5 1.5 0 0 0 1.5-1.5V6M9 2.5 12.5 6M9 2.5V6h3.5" /></svg
+    {#if panels.treeHidden}
+      <Rail label={t('editor.side.show', { key: keyLabel('Ctrl+B') })} onclick={() => panels.toggleTree()} />
+    {:else}
+      <aside class="editor-side" style:width="{treeShown}px">
+        <div class="views">
+          <div class="segmented" role="group" aria-label={t('editor.side.viewLabel')}>
+            <button
+              class:on={!search.shown}
+              aria-pressed={!search.shown}
+              aria-label={t('common.files')}
+              use:tip={t('common.files')}
+              onclick={() => (search.shown = false)}
             >
-          </button>
-          <button
-            class:on={search.shown}
-            aria-pressed={search.shown}
-            aria-label={t('editor.side.searchFiles')}
-            use:tip={t('editor.side.searchFilesKey', { key: keyLabel('Ctrl+Shift+F') })}
-            onclick={showSearch}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
-              ><circle cx="7" cy="7" r="4.2" /><path d="M10.2 10.2 13.5 13.5" /></svg
+              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
+                ><path d="M9 2.5H5A1.5 1.5 0 0 0 3.5 4v8A1.5 1.5 0 0 0 5 13.5h6a1.5 1.5 0 0 0 1.5-1.5V6M9 2.5 12.5 6M9 2.5V6h3.5" /></svg
+              >
+            </button>
+            <button
+              class:on={search.shown}
+              aria-pressed={search.shown}
+              aria-label={t('editor.side.searchFiles')}
+              use:tip={t('editor.side.searchFilesKey', { key: keyLabel('Ctrl+Shift+F') })}
+              onclick={showSearch}
             >
-          </button>
-        </div>
-      </div>
-      <div class="view" hidden={search.shown}>
-        <div class="ftitle">
-          <div class="row">
-            <span class="label">{t('common.files')}</span>
-            <div class="actions">
-              <button
-                class="act"
-                aria-label={t('editor.side.newFile')}
-                use:tip={t('editor.side.newFile')}
-                disabled={!tree}
-                onclick={() => newHere('file')}
+              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
+                ><circle cx="7" cy="7" r="4.2" /><path d="M10.2 10.2 13.5 13.5" /></svg
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
-                  ><path
-                    d="M8.5 2H4.5A1.5 1.5 0 0 0 3 3.5v9A1.5 1.5 0 0 0 4.5 14H8M8.5 2 13 6.5M8.5 2v4.5H13M13 6.5V9M12 10.5v4M10 12.5h4"
-                  /></svg
-                >
-              </button>
-              <button
-                class="act"
-                aria-label={t('editor.side.newFolder')}
-                use:tip={t('editor.side.newFolder')}
-                disabled={!tree}
-                onclick={() => newHere('dir')}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
-                  ><path
-                    d="M8 13H3.5A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3h2.6l1.5 1.5h4.9A1.5 1.5 0 0 1 14 6v2.5M12 10.5v4M10 12.5h4"
-                  /></svg
-                >
-              </button>
-              <button
-                class="act"
-                aria-label={t('common.refresh')}
-                use:tip={t('common.refresh')}
-                onclick={() => refresh(project.id, source, false)}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5V5h-2.5" /></svg>
-              </button>
-              <button
-                class="act"
-                aria-label={t('common.collapseAll')}
-                use:tip={t('common.collapseAll')}
-                onclick={() => app.collapseEditorDirs(project.id, source)}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
-                  ><rect x="5.5" y="5.5" width="8" height="8" rx="1" /><path d="M3 10.5V3.8a.8.8 0 0 1 .8-.8h6.7M7.5 9.5h4" /></svg
-                >
-              </button>
-            </div>
+            </button>
           </div>
-          <span class="mono dim root" use:tip={tree?.root}
-            >{srcAgent
-              ? srcAgent.worktree
-                ? worktreeLabel(project.path, srcAgent.worktree.path)
-                : tildify(project.path)
-              : tildify(project.path)}</span
-          >
-          {#if tree}
-            <span class="mono dim count">{summary}</span>
-          {/if}
+          <FoldButton label={t('editor.side.hide', { key: keyLabel('Ctrl+B') })} onclick={() => panels.toggleTree()} />
         </div>
-        <div class="scroll">
-          <FileTree
-            bind:this={fileTree}
-            {rows}
-            active={activePath}
-            ontoggle={(d) => {
-              lastDir = { source, dir: d };
-              app.toggleEditorDir(project.id, source, d);
-            }}
-            onopen={(p) => {
-              lastDir = { source, dir: parentOf(p) };
-              app.openEditor({ projectId: project.id, source, path: p });
-            }}
-            onmenu={treeMenu}
-            check={(name) => newFileError(name, addingDir ?? '', names(), adding?.kind)}
-            oncreate={(name) => create(adding, name)}
-            oncancel={() => (adding = null)}
-            adding={adding?.kind}
-            renaming={renaming?.source === source ? renaming : null}
-            {renameCheck}
-            onrename={(name) => rename(renaming, name)}
-            onrenamecancel={cancelRename}
-            onrenamerow={startRename}
-            ondeleterow={remove}
-          />
+        <div class="view" hidden={search.shown}>
+          <div class="ftitle">
+            <div class="row">
+              <span class="label">{t('common.files')}</span>
+              <div class="actions">
+                <button
+                  class="act"
+                  aria-label={t('editor.side.newFile')}
+                  use:tip={t('editor.side.newFile')}
+                  disabled={!tree}
+                  onclick={() => newHere('file')}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
+                    ><path
+                      d="M8.5 2H4.5A1.5 1.5 0 0 0 3 3.5v9A1.5 1.5 0 0 0 4.5 14H8M8.5 2 13 6.5M8.5 2v4.5H13M13 6.5V9M12 10.5v4M10 12.5h4"
+                    /></svg
+                  >
+                </button>
+                <button
+                  class="act"
+                  aria-label={t('editor.side.newFolder')}
+                  use:tip={t('editor.side.newFolder')}
+                  disabled={!tree}
+                  onclick={() => newHere('dir')}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
+                    ><path
+                      d="M8 13H3.5A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3h2.6l1.5 1.5h4.9A1.5 1.5 0 0 1 14 6v2.5M12 10.5v4M10 12.5h4"
+                    /></svg
+                  >
+                </button>
+                <button
+                  class="act"
+                  aria-label={t('common.refresh')}
+                  use:tip={t('common.refresh')}
+                  onclick={() => refresh(project.id, source, false)}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5V5h-2.5" /></svg
+                  >
+                </button>
+                <button
+                  class="act"
+                  aria-label={t('common.collapseAll')}
+                  use:tip={t('common.collapseAll')}
+                  onclick={() => app.collapseEditorDirs(project.id, source)}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
+                    ><rect x="5.5" y="5.5" width="8" height="8" rx="1" /><path d="M3 10.5V3.8a.8.8 0 0 1 .8-.8h6.7M7.5 9.5h4" /></svg
+                  >
+                </button>
+              </div>
+            </div>
+            <span class="mono dim root" use:tip={tree?.root}
+              >{srcAgent
+                ? srcAgent.worktree
+                  ? worktreeLabel(project.path, srcAgent.worktree.path)
+                  : tildify(project.path)
+                : tildify(project.path)}</span
+            >
+            {#if tree}
+              <span class="mono dim count">{summary}</span>
+            {/if}
+          </div>
+          <div class="scroll">
+            <FileTree
+              bind:this={fileTree}
+              {rows}
+              active={activePath}
+              ontoggle={(d) => {
+                lastDir = { source, dir: d };
+                app.toggleEditorDir(project.id, source, d);
+              }}
+              onopen={(p) => {
+                lastDir = { source, dir: parentOf(p) };
+                app.openEditor({ projectId: project.id, source, path: p });
+              }}
+              onmenu={treeMenu}
+              check={(name) => newFileError(name, addingDir ?? '', names(), adding?.kind)}
+              oncreate={(name) => create(adding, name)}
+              oncancel={() => (adding = null)}
+              adding={adding?.kind}
+              renaming={renaming?.source === source ? renaming : null}
+              {renameCheck}
+              onrename={(name) => rename(renaming, name)}
+              onrenamecancel={cancelRename}
+              onrenamerow={startRename}
+              ondeleterow={remove}
+            />
+          </div>
         </div>
-      </div>
-      <div class="view" hidden={!search.shown}>
-        <SearchPanel bind:this={panel} {search} onopen={(m) => jump({ path: m.path, line: m.line, col: m.col })} />
-      </div>
-    </aside>
-    <Splitter
-      value={treeShown}
-      min={TREE_MIN}
-      max={treeLimit}
-      reset={TREE_DEFAULT}
-      label={t('editor.side.widthLabel')}
-      onresize={(w) => (treeWidth = w)}
-      oncommit={writeTreeWidth}
-    />
+        <div class="view" hidden={!search.shown}>
+          <SearchPanel bind:this={panel} {search} onopen={(m) => jump({ path: m.path, line: m.line, col: m.col })} />
+        </div>
+      </aside>
+      <Splitter
+        value={treeShown}
+        min={TREE_MIN}
+        max={treeLimit}
+        reset={TREE_DEFAULT}
+        label={t('editor.side.widthLabel')}
+        onresize={(w) => (treeWidth = w)}
+        oncommit={writeTreeWidth}
+      />
+    {/if}
     <section class="pane" onwheel={wheelZoom}>
       <EditorTabs {tabs} onselect={(p) => app.openEditor({ projectId: project.id, source, path: p })} onclose={closeTab} onmenu={tabMenu} />
       {#if !activePath}

@@ -8,6 +8,7 @@ Escouade K, le fork de kulturman, part d'Escouade 1.7.9 : sa 2.0.0 reprend tout 
 
 ### Ajouts
 
+- La barre latérale et l'arborescence de l'éditeur se replient pour laisser la place au code : `⌘⇧E` (`Ctrl+Maj+E`) ou le bouton « ‹ » en haut de la barre latérale, `⌘B` (`Ctrl+B`) ou le bouton « ‹ » en haut de l'arborescence. Une fine bande les rouvre d'un clic, et leur état est gardé d'un lancement à l'autre.
 - Maintenir `⌥` (Option) pour parler : tiens Option seule, l'app écoute pour l'agent affiché ; relâche-la, elle transcrit. Un appui bref, ou Option avec une autre touche (`⌥é`, un raccourci), ne dicte pas. Activé par défaut, à couper dans Réglages › Application › Dictée.
 - Le raccourci de la dictée se choisit dans Réglages › Application › Dictée : un clic sur « Raccourci », puis la combinaison voulue, avec `⌘` (`Ctrl`) ou `⌥` (`Alt`) ; « Par défaut » revient à `⌘⇧M`. Il suit les lettres de ton clavier, AZERTY compris. Le raccourci arrête aussi une dictée en cours quand une fenêtre est ouverte par-dessus.
 - La dictée transcrit sur la puce graphique du Mac (Metal), nettement plus vite, surtout avec les gros modèles.

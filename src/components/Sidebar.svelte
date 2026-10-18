@@ -1,4 +1,6 @@
 <script lang="ts">
+  import FoldButton from './FoldButton.svelte';
+  import { panels } from '../lib/panels.svelte';
   import { tick } from 'svelte';
   import { keyLabel } from '../lib/platform';
   import { t } from '../lib/i18n';
@@ -309,6 +311,7 @@
         >Kanban{#if review}<span class="badge" use:tip={t('nav.sidebar.toReview', { count: review })}>{review}</span>{/if}</button
       >
     </div>
+    <FoldButton label={t('nav.sidebar.hide', { key: keyLabel('Ctrl+Shift+E') })} onclick={() => panels.toggleSidebar()} />
   </div>
 
   <div class="head">
@@ -608,7 +611,12 @@
     min-height: 0;
   }
   .views {
+    display: flex;
+    align-items: center;
     padding: 12px 10px 0;
+  }
+  .views .switcher {
+    flex: 1;
   }
   .switcher {
     display: flex;

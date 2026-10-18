@@ -14,6 +14,7 @@ import {
   isAppShortcut,
   optionAnswer,
 } from './shortcuts';
+import { panels } from './panels.svelte';
 import { app } from './state.svelte';
 import { voice } from './voice.svelte';
 
@@ -66,6 +67,14 @@ describe('handleShortcut', () => {
     app.ui = { ...app.ui, view: 'overview' };
     expect(handleShortcut(key('M', { shiftKey: true }))).toBe(false);
     expect(backend.called('voice_models')).toHaveLength(0);
+  });
+
+  it('folds the sidebar away and back with Ctrl+Shift+E (Cmd+Shift+E on macOS)', () => {
+    const was = panels.sidebarHidden;
+    expect(handleShortcut(new KeyboardEvent('keydown', { key: 'E', ctrlKey: true, shiftKey: true }), false)).toBe(true);
+    expect(panels.sidebarHidden).toBe(!was);
+    expect(handleShortcut(new KeyboardEvent('keydown', { key: 'E', metaKey: true, shiftKey: true }), true)).toBe(true);
+    expect(panels.sidebarHidden).toBe(was);
   });
 
   it('creates an agent with Ctrl+N', () => {

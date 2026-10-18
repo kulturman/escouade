@@ -32,6 +32,9 @@ export default {
   /** The left column: the files and the search. */
   side: {
     viewLabel: 'Vue de la colonne',
+    /** The tree folded away (Ctrl+B) and back. */
+    hide: 'Replier les fichiers ({key})',
+    show: 'Déplier les fichiers ({key})',
     searchFiles: 'Rechercher dans les fichiers',
     searchFilesKey: 'Rechercher dans les fichiers ({key})',
     newFile: 'Nouveau fichier',

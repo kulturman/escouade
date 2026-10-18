@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { keyLabel } from './lib/platform';
+  import Rail from './components/Rail.svelte';
+  import { panels } from './lib/panels.svelte';
   import { onMount } from 'svelte';
   import { t } from './lib/i18n';
   import { api } from './lib/ipc';
@@ -106,7 +109,11 @@
       <Stats />
     {:else if app.project}
       {@const project = app.project}
-      <Sidebar {project} />
+      {#if panels.sidebarHidden}
+        <Rail label={t('nav.sidebar.show', { key: keyLabel('Ctrl+Shift+E') })} onclick={() => panels.toggleSidebar()} />
+      {:else}
+        <Sidebar {project} />
+      {/if}
       {#if app.boardOn}
         {#key project.id}
           <Board {project} />

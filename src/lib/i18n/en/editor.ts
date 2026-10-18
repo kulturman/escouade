@@ -28,6 +28,8 @@ export default defineZone('editor', {
   },
 
   side: {
+    hide: 'Collapse the files ({key})',
+    show: 'Expand the files ({key})',
     viewLabel: 'Column view',
     searchFiles: 'Search in files',
     searchFilesKey: 'Search in files ({key})',

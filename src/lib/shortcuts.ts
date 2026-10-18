@@ -2,6 +2,7 @@
 
 import { fontSizeKey } from './editor/fontsize.svelte';
 import { findInFiles } from './editor/search.svelte';
+import { panels } from './panels.svelte';
 import { IS_MAC, primaryKey } from './platform';
 import { app } from './state.svelte';
 import { voice } from './voice.svelte';
@@ -77,7 +78,7 @@ export function isAppShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
   if (!primaryKey(e, mac)) return false;
   const k = e.key.toLowerCase();
   if (overviewKey(e)) return true;
-  if (mac) return digit(e) !== null || ['n', 't', 'j', ',', 'b', 'l', 'k'].includes(k) || isP(e);
+  if (mac) return digit(e) !== null || ['n', 't', 'j', ',', 'b', 'e', 'l', 'k'].includes(k) || isP(e);
   return digit(e) !== null || k === ',' || k === 'j';
 }
 
@@ -262,6 +263,15 @@ export function handleShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
   if (k === 't' && !e.shiftKey && app.project) {
     const projectId = app.project.id;
     import('./term-actions').then((m) => m.newTerminal(projectId));
+    return true;
+  }
+  // The sidebar folded away (Ctrl+Shift+E), the editor's tree (Ctrl+B), for more room.
+  if (k === 'e' && e.shiftKey && app.project) {
+    panels.toggleSidebar();
+    return true;
+  }
+  if (k === 'b' && !e.shiftKey && app.editorOn) {
+    panels.toggleTree();
     return true;
   }
   if (k === 'b' && e.shiftKey && !app.split) {
