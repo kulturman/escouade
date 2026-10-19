@@ -16,5 +16,28 @@ fn main() {
         println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
         println!("cargo:rustc-link-arg=/WX");
     }
+    clang_runtime_on_macos();
     tauri_build::try_build(attributes).expect("tauri build script");
+}
+
+/// whisper.cpp's Metal code checks the version of macOS as it runs (`@available`), which calls
+/// `__isPlatformVersionAtLeast` from clang's runtime. With LTO (the release profile) Rust's copy of
+/// it does not reach the link, and a release built for macOS 11 failed: "symbol(s) not found for
+/// architecture arm64". clang's own runtime (a universal archive) is linked instead.
+fn clang_runtime_on_macos() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+    let Ok(out) = std::process::Command::new("xcrun")
+        .args(["clang", "--print-resource-dir"])
+        .output()
+    else {
+        return;
+    };
+    let dir =
+        std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).join("lib/darwin");
+    if dir.join("libclang_rt.osx.a").is_file() {
+        println!("cargo:rustc-link-search=native={}", dir.display());
+        println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    }
 }
