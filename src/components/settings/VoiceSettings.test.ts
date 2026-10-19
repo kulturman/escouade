@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { setLang } from '../../lib/i18n';
@@ -58,5 +58,17 @@ describe('the « Dictée » group', () => {
     expect(select.selectedOptions[0].textContent).toBe('Langue de l’interface');
     await userEvent.selectOptions(select, 'auto');
     expect(settingsForm.settings.voiceLanguage).toBe('auto');
+  });
+
+  it('takes the dictation’s shortcut from the keys pressed after a click, and saves it with the other settings', async () => {
+    const backend = fakeBackend({ voice_models: () => MODELS, save_settings: () => [] });
+    render(SettingsModal, { tab: 'app' });
+    const button = await screen.findByRole('button', { name: 'Ctrl+Maj+M' });
+    await userEvent.click(button);
+    expect(button).toHaveTextContent('Presse la combinaison…');
+    await fireEvent.keyDown(button, { key: 'D', code: 'KeyD', ctrlKey: true, altKey: true });
+    expect(screen.getByRole('button', { name: 'Ctrl+Alt+D' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+    expect(backend.called('save_settings')[0].args.settings).toMatchObject({ voiceShortcut: 'Ctrl+Alt+D' });
   });
 });

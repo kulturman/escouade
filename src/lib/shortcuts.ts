@@ -2,9 +2,11 @@
 
 import { fontSizeKey } from './editor/fontsize.svelte';
 import { findInFiles } from './editor/search.svelte';
+import { panels } from './panels.svelte';
 import { IS_MAC, primaryKey } from './platform';
 import { app } from './state.svelte';
 import { voice } from './voice.svelte';
+import { isVoiceShortcut } from './voice-shortcut';
 
 /**
  * The digit of Ctrl+1…9 (Cmd+1…9 on macOS) from the physical key: on AZERTY keyboards the digit row types & é " '…
@@ -65,18 +67,18 @@ const overviewKey = (e: KeyboardEvent) => e.shiftKey && e.key.toLowerCase() === 
  * sends nothing at all for Ctrl+Shift+A. On macOS the app's shortcuts use Cmd, which the shell
  * never gets: they all go to the app, except copy, paste and select all (Cmd+A), handled by the
  * terminal. Ctrl+K stays with the shell (it cuts the end of the line), and so does Ctrl+P
- * (previous command) on Windows: « Ouvrir un fichier » is Cmd+P there. Ctrl+Shift+M (the dictation) goes to the app
- * everywhere.
+ * (previous command) on Windows: « Ouvrir un fichier » is Cmd+P there. The dictation's shortcut (Ctrl+Shift+M, or the
+ * one chosen in the settings) goes to the app everywhere.
  */
 export function isAppShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
+  // The dictation: also from Claude Code's view, where the terminal has the keyboard (with Alt too, if chosen so).
+  if (isVoiceShortcut(e, app.settings?.voiceShortcut, mac)) return true;
   if (e.altKey) return false;
   if (agentCycle(e)) return true;
   if (!primaryKey(e, mac)) return false;
   const k = e.key.toLowerCase();
-  // The dictation: also from Claude Code's view, where the terminal has the keyboard.
-  if (k === 'm' && e.shiftKey) return true;
   if (overviewKey(e)) return true;
-  if (mac) return digit(e) !== null || ['n', 't', 'j', ',', 'b', 'l', 'k'].includes(k) || isP(e);
+  if (mac) return digit(e) !== null || ['n', 't', 'j', ',', 'b', 'e', 'l', 'k'].includes(k) || isP(e);
   return digit(e) !== null || k === ',' || k === 'j';
 }
 
@@ -118,8 +120,94 @@ function openQuickOpen() {
   app.modal = { kind: 'quickOpen', projectId: project.id, source };
 }
 
+/** Shift tapped alone twice within this long opens « Ouvrir un fichier », as IntelliJ's Search Everywhere. */
+const DOUBLE_SHIFT_MS = 400;
+let shiftDown = false;
+let shiftAlone = false;
+let lastTap = 0;
+
+/**
+ * Follows Shift's presses (keydown and keyup, from anywhere: a terminal, the code): a second tap alone soon after the
+ * first opens « Ouvrir un fichier ». Shift held for another key (a capital, Shift+Tab) is not a tap. True when it opened.
+ */
+export function doubleShift(e: KeyboardEvent, now = performance.now()): boolean {
+  if (e.type === 'keydown') {
+    if (e.key === 'Shift') {
+      if (!e.repeat) {
+        shiftDown = true;
+        shiftAlone = !(e.ctrlKey || e.metaKey || e.altKey);
+      }
+    } else {
+      shiftAlone = false;
+      lastTap = 0;
+    }
+    return false;
+  }
+  if (e.type !== 'keyup' || e.key !== 'Shift' || !shiftDown) return false;
+  shiftDown = false;
+  if (!shiftAlone) return false;
+  if (lastTap && now - lastTap <= DOUBLE_SHIFT_MS) {
+    lastTap = 0;
+    openQuickOpen();
+    return app.modal?.kind === 'quickOpen';
+  }
+  lastTap = now;
+  return false;
+}
+
+/** Alt held alone this long starts the dictation: a character typed with Alt (⌥é) comes sooner. */
+export const HOLD_ALT_MS = 250;
+let holdTimer: ReturnType<typeof setTimeout> | null = null;
+/** The dictation Alt started, once its microphone is open (let go sooner, it ends then). */
+let holding: Promise<void> | null = null;
+
+/**
+ * « Maintenir ⌥ pour parler »: Alt (Option) held alone listens for the agent on screen, let go transcribes. A short tap
+ * does nothing; another key while it is held (a character, a shortcut) gives the dictation up, as it was not one.
+ * Follows keydown, keyup and the window's blur, from anywhere (captured).
+ */
+export function holdToTalk(e: KeyboardEvent | FocusEvent) {
+  const end = (cancel: boolean) => {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = null;
+    if (holding) void holding.then(() => (cancel ? voice.cancel() : voice.stop()));
+    holding = null;
+  };
+  if (e.type === 'blur') return end(false);
+  if (!(e instanceof KeyboardEvent)) return;
+  if (e.type === 'keyup') {
+    if (e.key === 'Alt') end(false);
+    return;
+  }
+  if (e.type !== 'keydown') return;
+  if (e.key !== 'Alt') {
+    if (holdTimer || holding) end(true);
+    return;
+  }
+  if (e.repeat || holdTimer || holding || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (!(app.settings?.voiceHoldAlt ?? true)) return;
+  holdTimer = setTimeout(() => {
+    holdTimer = null;
+    const a = app.agent;
+    if (!a || !app.agentOnScreen || app.modal || voice.phase !== 'idle') return;
+    holding = voice.start({ kind: a.terminal ? 'terminal' : 'composer', agentId: a.id });
+  }, HOLD_ALT_MS);
+}
+
 /** Runs the shortcut matching `e`. Returns true when the event was handled. */
 export function handleShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
+  // The dictation, first: its shortcut may hold Alt, if chosen so. It stops the one under way wherever it is for, a
+  // dialog open too; else it starts one for the agent on screen.
+  if (isVoiceShortcut(e, app.settings?.voiceShortcut, mac)) {
+    if (voice.phase === 'recording') {
+      void voice.stop();
+      return true;
+    }
+    const a = app.agent;
+    if (!a || !app.agentOnScreen || app.modal) return false;
+    void voice.toggle({ kind: a.terminal ? 'terminal' : 'composer', agentId: a.id });
+    return true;
+  }
   // Ctrl+Alt is AltGr on French keyboards (e.g. AltGr+2 = ~): never a shortcut.
   if (e.altKey) return false;
   // Taken whatever the window shows (a dialog open, no project): a Ctrl+P left to the WebView prints the page.
@@ -177,23 +265,21 @@ export function handleShortcut(e: KeyboardEvent, mac = IS_MAC): boolean {
     import('./term-actions').then((m) => m.newTerminal(projectId));
     return true;
   }
+  // The sidebar folded away (Ctrl+Shift+E), the editor's tree (Ctrl+B), for more room.
+  if (k === 'e' && e.shiftKey && app.project) {
+    panels.toggleSidebar();
+    return true;
+  }
+  if (k === 'b' && !e.shiftKey && app.editorOn) {
+    panels.toggleTree();
+    return true;
+  }
   if (k === 'b' && e.shiftKey && !app.split) {
     app.filesOpen = !app.filesOpen;
     return true;
   }
   if (k === 'l' && e.shiftKey) {
     app.toggleLayout();
-    return true;
-  }
-  // The dictation: stops the one under way wherever it is for, else starts one for the agent on screen.
-  if (k === 'm' && e.shiftKey) {
-    if (voice.phase === 'recording') {
-      void voice.stop();
-      return true;
-    }
-    const a = app.agent;
-    if (!a || !app.agentOnScreen) return false;
-    void voice.toggle({ kind: a.terminal ? 'terminal' : 'composer', agentId: a.id });
     return true;
   }
   if (overviewKey(e)) {

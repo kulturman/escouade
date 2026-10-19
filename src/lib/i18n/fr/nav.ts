@@ -7,6 +7,9 @@ export default {
     /** What an agent is doing (glossary: « En cours » is « Running » for an agent). */
     status: { running: 'En cours', waiting: 'Question', idle: 'Prêt', done: 'Terminé', error: 'Erreur' },
     viewLabel: 'Vue du projet',
+    /** The sidebar folded away (Ctrl+Shift+E) and back. */
+    hide: 'Replier la barre latérale ({key})',
+    show: 'Déplier la barre latérale ({key})',
     toReview: '{count} à tester',
     newAgent: 'Nouvel agent',
     newAgentTitle: 'Nouvel agent ({shortcut})',

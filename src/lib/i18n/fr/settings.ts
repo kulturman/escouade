@@ -63,6 +63,10 @@ export default {
 
   // The « Application » tab.
   app: {
+    display: 'Affichage',
+    zoom: 'Taille de l’interface',
+    zoomDesc:
+      'Agrandit ou réduit toute la fenêtre : textes, espacements, terminaux. L’éditeur garde sa propre taille de texte en plus (⌘⇧. / ⌘⇧,).',
     language: 'Langue',
     uiLanguage: 'Langue de l’interface',
     /** The system's language, named in the interface's: « Système (Français) ». */

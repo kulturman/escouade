@@ -41,6 +41,13 @@ export default {
     download: 'Télécharger',
     delete: 'Supprimer',
     cancel: 'Annuler',
+    shortcut: 'Raccourci',
+    shortcutDesc: 'Clique, puis presse la combinaison voulue, avec Ctrl (Cmd sous macOS) ou Alt. Échap annule.',
+    shortcutRecording: 'Presse la combinaison…',
+    shortcutDefault: 'Par défaut',
+    holdAlt: 'Maintenir ⌥ pour parler',
+    holdAltDesc:
+      'Tiens Option (Alt) seule : l’écoute commence ; relâche-la : le texte est transcrit. Option avec une autre touche ne dicte pas.',
     language: 'Langue parlée',
     languageDesc: 'La détection automatique se trompe plus souvent sur un prompt court.',
     languages: {

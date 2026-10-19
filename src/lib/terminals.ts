@@ -84,11 +84,11 @@ export function terminalTheme(readOnly = false): ITheme {
   const background = resolveColor('var(--term)');
   return {
     background,
-    foreground: '#ede7df',
+    foreground: '#bcbec4',
     cursor: readOnly ? background : resolveColor('var(--accent)'),
-    cursorAccent: '#1b1512',
+    cursorAccent: '#1e1f22',
     selectionBackground: resolveColor('color-mix(in oklch, var(--accent) 35%, transparent)') + '99',
-    black: '#2a2724',
+    black: '#2b2d30',
     red: '#e2735f',
     green: '#7cc48d',
     yellow: '#e9c46a',
@@ -96,7 +96,7 @@ export function terminalTheme(readOnly = false): ITheme {
     magenta: '#c792ea',
     cyan: '#6cc5c1',
     white: '#d8d0c4',
-    brightBlack: '#6f685f',
+    brightBlack: '#6f737a',
     brightRed: '#f08c78',
     brightGreen: '#9bd8a9',
     brightYellow: '#f4d68a',

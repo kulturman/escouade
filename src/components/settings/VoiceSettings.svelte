@@ -7,7 +7,10 @@
   import { app } from '../../lib/state.svelte';
   import type { VoiceModelState } from '../../lib/types';
   import { RECOMMENDED_MODEL, VOICE_LANGUAGES, modelDesc, modelName, voice } from '../../lib/voice.svelte';
+  import { keyLabel } from '../../lib/platform';
+  import { comboOf, DEFAULT_VOICE_SHORTCUT } from '../../lib/voice-shortcut';
   import Group from './Group.svelte';
+  import Switch from './Switch.svelte';
   import Row from './Row.svelte';
 
   // « Dictée »: the model chosen goes with the other settings (« Enregistrer »); downloading and deleting a model act at
@@ -27,6 +30,28 @@
       app.toast(String(e), 'error');
     }
     await refresh();
+  }
+
+  // « Raccourci »: a click, then the keys pressed; Escape gives up, a key that cannot be a shortcut waits for another.
+  // Read on the whole window, before anything else: WebKit gives no focus to a button clicked.
+  let recording = $state(false);
+  $effect(() => {
+    if (!recording) return;
+    window.addEventListener('keydown', onShortcutKey, true);
+    return () => window.removeEventListener('keydown', onShortcutKey, true);
+  });
+  function onShortcutKey(e: KeyboardEvent) {
+    if (!recording) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') {
+      recording = false;
+      return;
+    }
+    const combo = comboOf(e);
+    if (!combo) return;
+    s.voiceShortcut = combo;
+    recording = false;
   }
 
   async function remove(id: string) {
@@ -61,6 +86,17 @@
         </div>
       {/each}
     </div>
+  </Row>
+  <Row label={t('voice.settings.shortcut')} desc={t('voice.settings.shortcutDesc')}>
+    <button class="btn" aria-pressed={recording} onclick={() => (recording = !recording)}
+      >{recording ? t('voice.settings.shortcutRecording') : keyLabel(s.voiceShortcut || DEFAULT_VOICE_SHORTCUT)}</button
+    >
+    {#if (s.voiceShortcut || DEFAULT_VOICE_SHORTCUT) !== DEFAULT_VOICE_SHORTCUT}
+      <button class="btn ghost" onclick={() => (s.voiceShortcut = DEFAULT_VOICE_SHORTCUT)}>{t('voice.settings.shortcutDefault')}</button>
+    {/if}
+  </Row>
+  <Row label={t('voice.settings.holdAlt')} desc={t('voice.settings.holdAltDesc')}>
+    <Switch label={t('voice.settings.holdAlt')} bind:on={s.voiceHoldAlt} />
   </Row>
   <Row label={t('voice.settings.language')} desc={t('voice.settings.languageDesc')}>
     <select class="field select" aria-label={t('voice.settings.language')} bind:value={s.voiceLanguage}>

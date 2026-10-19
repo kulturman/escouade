@@ -1434,8 +1434,9 @@ pub fn postpone<R: Runtime>(app: &AppHandle<R>) {
 /// Restarts the app by itself for the update downloaded, the setting on, once it is at rest,
 /// the user warned `WARNING` before (a system notification, the status bar's countdown).
 pub fn watch<R: Runtime>(app: AppHandle<R>) {
-    // Sandboxed runs (end-to-end tests, demos) never restart under the one driving them.
-    if crate::paths::sandbox_dir().is_some() {
+    // Sandboxed runs (end-to-end tests, demos) never restart under the one driving them, and a
+    // development build never replaces itself with a release (which would be older than its code).
+    if crate::paths::sandbox_dir().is_some() || cfg!(debug_assertions) {
         return;
     }
     tauri::async_runtime::spawn(async move {

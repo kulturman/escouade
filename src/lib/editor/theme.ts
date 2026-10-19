@@ -5,16 +5,17 @@ import { EditorView } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import { t, type Key } from '../i18n';
 
+// IntelliJ's « Dark » colors of code: orange keywords, green strings, cyan numbers, blue functions, purple fields.
 const C = {
-  kw: 'var(--accent)',
-  str: 'oklch(0.8 0.1 145)',
-  num: 'oklch(0.82 0.11 75)',
-  com: 'var(--dim)',
-  type: 'oklch(0.82 0.08 215)',
-  fn: 'oklch(0.87 0.08 95)',
-  prop: 'oklch(0.84 0.06 270)',
-  pun: 'var(--muted)',
-  txt: 'var(--text)',
+  kw: '#CF8E6D',
+  str: '#6AAB73',
+  num: '#2AACB8',
+  com: '#7A7E85',
+  type: '#BCBEC4',
+  fn: '#56A8F5',
+  prop: '#C77DBB',
+  pun: '#BCBEC4',
+  txt: '#BCBEC4',
 };
 
 const highlight = HighlightStyle.define([

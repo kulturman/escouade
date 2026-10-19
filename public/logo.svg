@@ -1,11 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <title>Escouade</title>
-  <!-- The prompt: a teal tile, Claude Code's chevron, and the spark where the cursor waits. -->
-  <rect x="8" y="8" width="84" height="84" rx="24" fill="#35C1BD" />
+  <title>Escouade K</title>
+  <!-- Escouade K, kulturman's fork: Escouade's prompt (the tile, Claude Code's chevron) in violet, a K where the
+       cursor waits, so that it is told apart from Escouade's teal one at a glance. -->
+  <rect x="8" y="8" width="84" height="84" rx="24" fill="#9B7BF7" />
   <path d="M25 33L42 50L25 67" fill="none" stroke="#08090A" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round" />
-  <!-- The spark: eight rounded rays, long and short alternating. -->
-  <g transform="translate(65 50)" stroke="#08090A" stroke-linecap="round">
-    <path d="M0 -12V12M-12 0H12" stroke-width="5.4" />
-    <path d="M-7.1 -7.1L7.1 7.1M-7.1 7.1L7.1 -7.1" stroke-width="4.4" />
-  </g>
+  <path d="M58 36V64M72 36L59.5 51M63 47.5L72.5 64" fill="none" stroke="#08090A" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" />
 </svg>

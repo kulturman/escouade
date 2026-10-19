@@ -3,6 +3,7 @@
   import { settingsForm } from '../../lib/settings.svelte';
   import { app } from '../../lib/state.svelte';
   import Chips from './Chips.svelte';
+  import { DEFAULT_ZOOM, ZOOMS } from '../../lib/zoom';
   import Group from './Group.svelte';
   import Row from './Row.svelte';
   import VoiceSettings from './VoiceSettings.svelte';
@@ -19,6 +20,16 @@
   ]);
   const claudeOptions = $derived([{ value: 'ui' as const, label: t('settings.app.sameAsUi') }, ...own]);
 </script>
+
+<Group title={t('settings.app.display')}>
+  <Row label={t('settings.app.zoom')} desc={t('settings.app.zoomDesc')}>
+    <Chips
+      label={t('settings.app.zoom')}
+      options={ZOOMS.map((z) => ({ value: String(z), label: `${Math.round(z * 100)} %` }))}
+      bind:value={() => String(s.uiZoom ?? DEFAULT_ZOOM), (v) => (s.uiZoom = Number(v))}
+    />
+  </Row>
+</Group>
 
 <Group title={t('settings.app.language')}>
   <Row label={t('settings.app.uiLanguage')}>

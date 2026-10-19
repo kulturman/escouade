@@ -2,7 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agent, fakeBackend, project, resetApp } from '../test/ipc';
 import { buffers } from './editor/buffers.svelte';
 import { setFindInFiles } from './editor/search.svelte';
-import { answersHere, ariaEnter, enterAnswer, handleShortcut, holdPrint, isAppShortcut, optionAnswer } from './shortcuts';
+import {
+  answersHere,
+  ariaEnter,
+  doubleShift,
+  enterAnswer,
+  handleShortcut,
+  HOLD_ALT_MS,
+  holdPrint,
+  holdToTalk,
+  isAppShortcut,
+  optionAnswer,
+} from './shortcuts';
+import { panels } from './panels.svelte';
 import { app } from './state.svelte';
 import { voice } from './voice.svelte';
 
@@ -57,6 +69,14 @@ describe('handleShortcut', () => {
     expect(backend.called('voice_models')).toHaveLength(0);
   });
 
+  it('folds the sidebar away and back with Ctrl+Shift+E (Cmd+Shift+E on macOS)', () => {
+    const was = panels.sidebarHidden;
+    expect(handleShortcut(new KeyboardEvent('keydown', { key: 'E', ctrlKey: true, shiftKey: true }), false)).toBe(true);
+    expect(panels.sidebarHidden).toBe(!was);
+    expect(handleShortcut(new KeyboardEvent('keydown', { key: 'E', metaKey: true, shiftKey: true }), true)).toBe(true);
+    expect(panels.sidebarHidden).toBe(was);
+  });
+
   it('creates an agent with Ctrl+N', () => {
     const backend = fakeBackend({ create_agent: () => agent({ id: 'a3', createdAt: 3 }) });
     expect(handleShortcut(key('n'))).toBe(true);
@@ -99,6 +119,72 @@ describe('handleShortcut', () => {
     expect(handleShortcut(key('A', { shiftKey: true }), true)).toBe(false);
     expect(handleShortcut(new KeyboardEvent('keydown', { key: 'a', metaKey: true, shiftKey: true }), true)).toBe(true);
     expect(app.ui.view).toBe('overview');
+  });
+
+  it('listens while Option is held alone, transcribes when it is let go, and leaves a tap or ⌥+key alone', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeBackend();
+      const start = vi.spyOn(voice, 'start').mockResolvedValue();
+      const stop = vi.spyOn(voice, 'stop').mockResolvedValue();
+      const cancel = vi.spyOn(voice, 'cancel').mockResolvedValue();
+      const ev = (type: string, key: string, over: KeyboardEventInit = {}) => new KeyboardEvent(type, { key, ...over });
+      // Held: it listens for the agent on screen; let go: it transcribes.
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      await vi.advanceTimersByTimeAsync(HOLD_ALT_MS + 10);
+      expect(start).toHaveBeenCalledWith({ kind: 'composer', agentId: 'a1' });
+      holdToTalk(ev('keyup', 'Alt'));
+      await vi.runAllTimersAsync();
+      expect(stop).toHaveBeenCalledTimes(1);
+      // A tap: nothing.
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      await vi.advanceTimersByTimeAsync(100);
+      holdToTalk(ev('keyup', 'Alt'));
+      await vi.runAllTimersAsync();
+      expect(start).toHaveBeenCalledTimes(1);
+      // ⌥é: the key comes before the dictation would; once it listens, another key gives it up.
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      holdToTalk(ev('keydown', 'é', { altKey: true }));
+      await vi.runAllTimersAsync();
+      expect(start).toHaveBeenCalledTimes(1);
+      holdToTalk(ev('keyup', 'Alt'));
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      await vi.advanceTimersByTimeAsync(HOLD_ALT_MS + 10);
+      holdToTalk(ev('keydown', '(', { altKey: true }));
+      await vi.runAllTimersAsync();
+      expect(cancel).toHaveBeenCalledTimes(1);
+      holdToTalk(ev('keyup', 'Alt'));
+      // Turned off in the settings: nothing.
+      app.settings = { ...app.settings, voiceHoldAlt: false };
+      holdToTalk(ev('keydown', 'Alt', { altKey: true }));
+      await vi.runAllTimersAsync();
+      holdToTalk(ev('keyup', 'Alt'));
+      expect(start).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('opens « Ouvrir un fichier » with Shift tapped twice, as IntelliJ, but not with Shift held for a key', () => {
+    fakeBackend();
+    const ev = (type: string, key: string, over: KeyboardEventInit = {}) => new KeyboardEvent(type, { key, ...over });
+    const tap = (at: number) => {
+      doubleShift(ev('keydown', 'Shift'), at);
+      return doubleShift(ev('keyup', 'Shift'), at + 50);
+    };
+    expect(tap(0)).toBe(false);
+    expect(tap(1000)).toBe(false);
+    expect(app.modal).toBeNull();
+    expect(tap(1200)).toBe(true);
+    expect(app.modal).toEqual({ kind: 'quickOpen', projectId: 'p1', source: 'project' });
+    app.modal = null;
+    // A capital typed between the two: Shift was held for it.
+    tap(5000);
+    doubleShift(ev('keydown', 'Shift'), 5100);
+    doubleShift(ev('keydown', 'A', { shiftKey: true }), 5120);
+    expect(doubleShift(ev('keyup', 'Shift'), 5150)).toBe(false);
+    expect(tap(5200)).toBe(false);
+    expect(app.modal).toBeNull();
   });
 
   it('opens « Ouvrir un fichier » with Ctrl+P, Cmd+P on macOS, over a source that depends on what is shown', async () => {

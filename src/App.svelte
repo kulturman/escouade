@@ -1,9 +1,13 @@
 <script lang="ts">
+  import { applyZoom } from './lib/zoom';
+  import { keyLabel } from './lib/platform';
+  import Rail from './components/Rail.svelte';
+  import { panels } from './lib/panels.svelte';
   import { onMount } from 'svelte';
   import { t } from './lib/i18n';
   import { api } from './lib/ipc';
   import { app } from './lib/state.svelte';
-  import { handleShortcut, holdPrint } from './lib/shortcuts';
+  import { doubleShift, handleShortcut, holdPrint, holdToTalk } from './lib/shortcuts';
   import { watchForUpdates } from './lib/updater';
   import { watchPresence } from './lib/presence';
   import { createWarmer } from './lib/warm';
@@ -59,6 +63,11 @@
     app.applyTheme();
   });
 
+  // « Taille de l'interface », at start and each time it is saved.
+  $effect(() => {
+    void applyZoom(app.settings?.uiZoom);
+  });
+
   const warmSelected = createWarmer((id) => api.warmAgent(id).catch(() => {}));
   $effect(() => warmSelected(app.agent));
 
@@ -78,7 +87,20 @@
   }
 </script>
 
-<svelte:window onkeydowncapture={(e) => holdPrint(e)} onkeydown={onKeydown} onfocus={() => app.markSeen()} />
+<svelte:window
+  onkeydowncapture={(e) => {
+    holdPrint(e);
+    doubleShift(e);
+    holdToTalk(e);
+  }}
+  onkeyupcapture={(e) => {
+    doubleShift(e);
+    holdToTalk(e);
+  }}
+  onblur={(e) => holdToTalk(e)}
+  onkeydown={onKeydown}
+  onfocus={() => app.markSeen()}
+/>
 
 <div class="root">
   <TitleBar />
@@ -93,7 +115,11 @@
       <Stats />
     {:else if app.project}
       {@const project = app.project}
-      <Sidebar {project} />
+      {#if panels.sidebarHidden}
+        <Rail label={t('nav.sidebar.show', { key: keyLabel('Ctrl+Shift+E') })} onclick={() => panels.toggleSidebar()} />
+      {:else}
+        <Sidebar {project} />
+      {/if}
       {#if app.boardOn}
         {#key project.id}
           <Board {project} />

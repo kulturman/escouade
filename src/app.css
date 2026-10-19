@@ -10,27 +10,28 @@
 /* Design tokens (design/Claude Code Manager.dc.html). Surfaces are re-tinted with the active
    project's color by lib/theme.ts. */
 :root {
-  --bg: #1b1917;
-  --panel: #211f1c;
-  --elev: #2a2724;
-  --elev2: #34302c;
-  --user: #302c28;
-  --term: #131210;
-  --line: rgba(255, 236, 214, 0.08);
-  --line2: rgba(255, 236, 214, 0.15);
-  --text: #ede7df;
-  --muted: #a8a095;
-  --dim: #6f685f;
-  --accent: oklch(0.72 0.12 48);
-  --accent-soft: oklch(0.72 0.12 48 / 0.38);
-  --accent-ink: #1b1512;
-  --ok: oklch(0.76 0.12 150);
-  --wait: oklch(0.82 0.13 80);
-  --wait-soft: oklch(0.82 0.13 80 / 0.08);
-  --wait-ring: oklch(0.82 0.13 80 / 0.6);
-  --add: oklch(0.76 0.12 150);
-  --del: oklch(0.72 0.14 25);
-  --info: oklch(0.74 0.12 235);
+  /* IntelliJ's « Dark » (its new UI); theme.ts sets the same surfaces, for every project. */
+  --bg: #1e1f22;
+  --panel: #2b2d30;
+  --elev: #393b40;
+  --elev2: #43454a;
+  --user: #2b2d30;
+  --term: #1e1f22;
+  --line: rgba(255, 255, 255, 0.08);
+  --line2: rgba(255, 255, 255, 0.15);
+  --text: #dfe1e5;
+  --muted: #a8adbd;
+  --dim: #6f737a;
+  --accent: #3574f0;
+  --accent-soft: rgba(53, 116, 240, 0.38);
+  --accent-ink: #ffffff;
+  --ok: #5fb865;
+  --wait: #e5c07b;
+  --wait-soft: rgba(229, 192, 123, 0.08);
+  --wait-ring: rgba(229, 192, 123, 0.6);
+  --add: #5fb865;
+  --del: #e06c75;
+  --info: #56a8f5;
   --ui: 'Hanken Grotesk', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
   --r: 10px;

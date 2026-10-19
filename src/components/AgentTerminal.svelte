@@ -195,7 +195,9 @@
   {#if voice.isFor({ kind: 'terminal', agentId: agent.id })}
     <div class="voice" role="status">
       <span class="dot" aria-hidden="true"></span>
-      {voice.phase === 'transcribing' ? t('voice.overlay.transcribing') : t('voice.overlay.listening', { key: keyLabel('Ctrl+Shift+M') })}
+      {voice.phase === 'transcribing'
+        ? t('voice.overlay.transcribing')
+        : t('voice.overlay.listening', { key: keyLabel(app.settings.voiceShortcut || 'Ctrl+Shift+M') })}
     </div>
   {/if}
 </div>

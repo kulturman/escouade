@@ -8,6 +8,7 @@ import { movedPath } from '../../lib/editor/tree';
 import { trees } from '../../lib/editor/trees.svelte';
 import { setLang } from '../../lib/i18n';
 import { menu } from '../../lib/menu.svelte';
+import { panels } from '../../lib/panels.svelte';
 import { handleShortcut } from '../../lib/shortcuts';
 import { app } from '../../lib/state.svelte';
 import { openTerminal } from '../../lib/terminals';
@@ -125,6 +126,21 @@ describe('EditorView', () => {
     expect(m['Fermer les autres onglets'].disabled).toBe(true);
     m['Fermer tous les onglets'].onClick!();
     await waitFor(() => expect(screen.queryByRole('tab')).toBeNull());
+  });
+
+  it('folds the tree away with Ctrl+B or its button, and unfolds it from the strip left in its place', async () => {
+    backend();
+    await app.openEditor({ source: 'project', path: 'src/app.ts' });
+    render(EditorView, { project: project() });
+    expect(await screen.findByRole('treeitem', { name: /src/ })).toBeInTheDocument();
+    expect(handleShortcut(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true }), false)).toBe(true);
+    await waitFor(() => expect(screen.queryByRole('treeitem', { name: /src/ })).toBeNull());
+    await userEvent.click(screen.getByRole('button', { name: 'Déplier les fichiers (Ctrl+B)' }));
+    expect(await screen.findByRole('treeitem', { name: /src/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Replier les fichiers (Ctrl+B)' }));
+    await waitFor(() => expect(screen.queryByRole('treeitem', { name: /src/ })).toBeNull());
+    expect(localStorage.getItem('escouade.editor.treeHidden')).toBe('1');
+    panels.toggleTree();
   });
 
   it('saves what was typed', async () => {

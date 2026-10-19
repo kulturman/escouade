@@ -54,6 +54,9 @@ export default defineZone('settings', {
   },
 
   app: {
+    display: 'Display',
+    zoom: 'Interface size',
+    zoomDesc: 'Makes the whole window bigger or smaller: text, spacing, terminals. The editor keeps its own text size on top (⌘⇧. / ⌘⇧,).',
     language: 'Language',
     uiLanguage: 'Interface language',
     system: 'System ({lang})',

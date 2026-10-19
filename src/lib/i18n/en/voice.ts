@@ -41,6 +41,12 @@ export default defineZone('voice', {
     download: 'Download',
     delete: 'Delete',
     cancel: 'Cancel',
+    shortcut: 'Shortcut',
+    shortcutDesc: 'Click, then press the keys you want, with Ctrl (Cmd on macOS) or Alt. Esc cancels.',
+    shortcutRecording: 'Press the keys…',
+    shortcutDefault: 'Default',
+    holdAlt: 'Hold ⌥ to talk',
+    holdAltDesc: 'Hold Option (Alt) alone: listening starts; let go: the text is transcribed. Option with another key does not dictate.',
     language: 'Spoken language',
     languageDesc: 'Automatic detection is wrong more often on a short prompt.',
     languages: {

@@ -4,6 +4,24 @@ Les changements visibles d'Escouade, version par version. Les notes de chaque re
 
 Escouade K, le fork de kulturman, part d'Escouade 1.7.9 : sa 2.0.0 reprend tout ce qu'Escouade avait de plus au 2026-10-16, et ajoute ses propres features.
 
+## [Non publié]
+
+### Ajouts
+
+- La taille de toute l'interface se règle dans Réglages › Application › Affichage : de 90 à 150 %, 110 % par défaut. Textes, espacements et terminaux suivent ; l'éditeur garde sa propre taille de texte en plus.
+- Escouade K prend les couleurs du thème sombre d'IntelliJ (« Dark », sa nouvelle interface) : des gris neutres à la place des bruns, l'accent bleu, et les couleurs de code d'IntelliJ dans l'éditeur. La couleur d'un projet ne teinte plus toute la fenêtre : elle reste sur sa pastille.
+- La barre latérale et l'arborescence de l'éditeur se replient pour laisser la place au code : `⌘⇧E` (`Ctrl+Maj+E`) ou le bouton « ‹ » en haut de la barre latérale, `⌘B` (`Ctrl+B`) ou le bouton « ‹ » en haut de l'arborescence. Une fine bande les rouvre d'un clic, et leur état est gardé d'un lancement à l'autre.
+- Maintenir `⌥` (Option) pour parler : tiens Option seule, l'app écoute pour l'agent affiché ; relâche-la, elle transcrit. Un appui bref, ou Option avec une autre touche (`⌥é`, un raccourci), ne dicte pas. Activé par défaut, à couper dans Réglages › Application › Dictée.
+- Le raccourci de la dictée se choisit dans Réglages › Application › Dictée : un clic sur « Raccourci », puis la combinaison voulue, avec `⌘` (`Ctrl`) ou `⌥` (`Alt`) ; « Par défaut » revient à `⌘⇧M`. Il suit les lettres de ton clavier, AZERTY compris. Le raccourci arrête aussi une dictée en cours quand une fenêtre est ouverte par-dessus.
+- La dictée transcrit sur la puce graphique du Mac (Metal), nettement plus vite, surtout avec les gros modèles.
+- Escouade K a son logo : la tuile d'Escouade en violet, son chevron, et un K à la place de l'étoile. Il se distingue d'Escouade dans le Dock, le sélecteur d'apps et la barre de titre.
+- `Maj` pressée deux fois de suite, comme dans IntelliJ, ouvre « Ouvrir un fichier » (comme `⌘P`), depuis l'éditeur, la conversation ou un terminal. `Maj` tenue pour une majuscule ou un raccourci ne compte pas.
+
+### Corrections
+
+- Une version de développement d'Escouade K ne se remplace plus d'elle-même par la dernière release (plus ancienne que son code) : elle peut proposer la mise à jour, jamais l'installer seule.
+- La dictée ne risque plus de faire planter l'app sur un Mac plus ancien que celui qui l'a compilée : whisper.cpp est compilé pour tout Mac Apple Silicon et tout Mac Intel avec AVX2, plus pour le processeur de la machine de build.
+
 ## [2.0.0] — 2026-10-16
 
 Première version d'Escouade K. Elle s'installe à côté d'Escouade sans la toucher : son nom, son identifiant (`dev.kulturman.escouade`), son dossier de données (`~/.escouade-kulturman/`) et ses mises à jour, depuis les releases de kulturman/escouade. Tes projets, tes agents et tes réglages d'Escouade ne sont pas repris ; les jetons des intégrations sont à ressaisir. Aucune statistique d'usage n'est envoyée.

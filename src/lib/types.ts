@@ -52,6 +52,12 @@ export interface Settings {
   voiceModel: string;
   /** « Dictée › Langue parlée »: `ui` (the interface's), `auto` (detected) or a language code. */
   voiceLanguage: string;
+  /** « Dictée › Raccourci »: `Ctrl+Shift+M` (Cmd on macOS), as the app writes its shortcuts. */
+  voiceShortcut: string;
+  /** « Dictée › Maintenir ⌥ pour parler »: Alt (Option) held alone listens, let go transcribes. */
+  voiceHoldAlt: boolean;
+  /** « Affichage › Taille de l'interface »: the WebView's zoom (1.1 is 110 %). */
+  uiZoom: number;
   /** « Remote control pour tous les agents »: every agent of every project is reachable from claude.ai and the Claude app, unless set apart by hand (`Agent.remoteOff`). */
   remoteControlAll: boolean;
 }

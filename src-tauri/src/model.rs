@@ -79,6 +79,12 @@ pub struct Settings {
     pub voice_model: String,
     /// « Dictée › Langue parlée »: `ui` (the interface's), `auto` (detected) or a language code.
     pub voice_language: String,
+    /// « Dictée › Raccourci »: as the app writes its shortcuts (`Ctrl+Shift+M`, Cmd on macOS).
+    pub voice_shortcut: String,
+    /// « Dictée › Maintenir ⌥ pour parler »: Alt (Option) held alone listens, let go transcribes.
+    pub voice_hold_alt: bool,
+    /// « Affichage › Taille de l'interface »: the WebView's zoom (1.1 is 110 %).
+    pub ui_zoom: f64,
     /// « Remote control pour tous les agents »: every agent, those of tickets too, is reachable
     /// from claude.ai (`AgentMeta::remote_control`, `RemoteSource::Global`).
     pub remote_control_all: bool,
@@ -273,6 +279,9 @@ impl Default for Settings {
             telemetry: None,
             voice_model: crate::voice::models::DEFAULT_MODEL.into(),
             voice_language: "ui".into(),
+            voice_shortcut: "Ctrl+Shift+M".into(),
+            voice_hold_alt: true,
+            ui_zoom: 1.1,
             remote_control_all: false,
         }
     }
@@ -1587,6 +1596,9 @@ mod tests {
             (s.voice_model.as_str(), s.voice_language.as_str()),
             ("small-q5_1", "ui")
         );
+        assert_eq!(s.voice_shortcut, "Ctrl+Shift+M");
+        assert!(s.voice_hold_alt);
+        assert_eq!(s.ui_zoom, 1.1);
         let d = Settings::default();
         assert_eq!(
             (d.voice_model.as_str(), d.voice_language.as_str()),
