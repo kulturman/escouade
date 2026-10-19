@@ -12,6 +12,7 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
+    "core:webview:allow-set-webview-zoom",
     "dialog:allow-open",
     "opener:allow-open-url",
     "opener:allow-default-urls",

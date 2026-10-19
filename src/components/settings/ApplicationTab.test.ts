@@ -85,4 +85,14 @@ describe('the « Application » tab', () => {
       'Proposed commit messages and pull request descriptions, comments posted to Jira, Trello, GitHub, and Linear, instructions given to agents (by default, the proposed commit message follows the language of the repository’s latest commits).',
     );
   });
+
+  it('sets the size of the interface, 110 % at first, saved with the other settings', async () => {
+    const backend = fakeBackend({ save_settings: () => [] });
+    render(SettingsModal, { tab: 'app' });
+    const group = await screen.findByRole('group', { name: 'Taille de l’interface' });
+    expect(within(group).getByRole('button', { name: '110 %' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(within(group).getByRole('button', { name: '130 %' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+    expect(backend.called('save_settings')[0].args.settings).toMatchObject({ uiZoom: 1.3 });
+  });
 });

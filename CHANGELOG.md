@@ -8,6 +8,7 @@ Escouade K, le fork de kulturman, part d'Escouade 1.7.9 : sa 2.0.0 reprend tout 
 
 ### Ajouts
 
+- La taille de toute l'interface se règle dans Réglages › Application › Affichage : de 90 à 150 %, 110 % par défaut. Textes, espacements et terminaux suivent ; l'éditeur garde sa propre taille de texte en plus.
 - Escouade K prend les couleurs du thème sombre d'IntelliJ (« Dark », sa nouvelle interface) : des gris neutres à la place des bruns, l'accent bleu, et les couleurs de code d'IntelliJ dans l'éditeur. La couleur d'un projet ne teinte plus toute la fenêtre : elle reste sur sa pastille.
 - La barre latérale et l'arborescence de l'éditeur se replient pour laisser la place au code : `⌘⇧E` (`Ctrl+Maj+E`) ou le bouton « ‹ » en haut de la barre latérale, `⌘B` (`Ctrl+B`) ou le bouton « ‹ » en haut de l'arborescence. Une fine bande les rouvre d'un clic, et leur état est gardé d'un lancement à l'autre.
 - Maintenir `⌥` (Option) pour parler : tiens Option seule, l'app écoute pour l'agent affiché ; relâche-la, elle transcrit. Un appui bref, ou Option avec une autre touche (`⌥é`, un raccourci), ne dicte pas. Activé par défaut, à couper dans Réglages › Application › Dictée.

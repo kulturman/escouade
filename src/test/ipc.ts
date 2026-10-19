@@ -76,6 +76,7 @@ export const SETTINGS: Settings = {
   voiceLanguage: 'ui',
   voiceShortcut: 'Ctrl+Shift+M',
   voiceHoldAlt: true,
+  uiZoom: 1.1,
   remoteControlAll: false,
 };
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { applyZoom } from './lib/zoom';
   import { keyLabel } from './lib/platform';
   import Rail from './components/Rail.svelte';
   import { panels } from './lib/panels.svelte';
@@ -60,6 +61,11 @@
     void app.ui.view;
     void app.project?.color;
     app.applyTheme();
+  });
+
+  // « Taille de l'interface », at start and each time it is saved.
+  $effect(() => {
+    void applyZoom(app.settings?.uiZoom);
   });
 
   const warmSelected = createWarmer((id) => api.warmAgent(id).catch(() => {}));
