@@ -1,6 +1,19 @@
-// Tints the UI surfaces with the active project's color, as the design's applyTheme() does.
+// The colors of the UI surfaces: IntelliJ's « Dark » theme (its new UI), the same for every project.
 
-const DEFAULT = 'oklch(0.72 0.12 48)';
+/** IntelliJ's « Dark »: the editor's gray, the tool windows' one, their borders, the blue accent. */
+export const DARK: Record<string, string> = {
+  '--accent': '#3574F0',
+  '--accent-soft': 'rgba(53, 116, 240, 0.38)',
+  '--accent-ink': '#FFFFFF',
+  '--bg': '#1E1F22',
+  '--panel': '#2B2D30',
+  '--elev': '#393B40',
+  '--elev2': '#43454A',
+  '--user': '#2B2D30',
+  '--line': 'rgba(255, 255, 255, 0.08)',
+  '--line2': 'rgba(255, 255, 255, 0.15)',
+  '--term': '#1E1F22',
+};
 
 export const PROJECT_COLORS = [48, 300, 200, 150, 250, 0, 25, 70, 110, 175, 225, 275, 325]
   .map((h) => `oklch(0.72 0.12 ${h})`)
@@ -8,24 +21,16 @@ export const PROJECT_COLORS = [48, 300, 200, 150, 250, 0, 25, 70, 110, 175, 225,
 
 let applied = '';
 
+/**
+ * The surfaces and the accent: Escouade K's theme, after IntelliJ's « Dark » (its new UI). The project's color no longer
+ * tints them (it stays on the project's swatch): `color` is taken for the API's sake only.
+ */
 export function applyTheme(color: string | null) {
-  const c = color ?? DEFAULT;
-  const tint = color !== null;
-  const key = c + (tint ? ':t' : ':n');
-  if (applied === key) return;
-  applied = key;
+  void color;
+  if (applied === 'intellij') return;
+  applied = 'intellij';
   const st = document.documentElement.style;
-  const mix = (pct: number, base: string) => (tint ? `color-mix(in oklch, ${c} ${pct}%, ${base})` : base);
-  st.setProperty('--accent', c);
-  st.setProperty('--accent-soft', `color-mix(in oklch, ${c} 38%, transparent)`);
-  st.setProperty('--bg', mix(7, '#191715'));
-  st.setProperty('--panel', mix(11, '#1e1c1a'));
-  st.setProperty('--elev', mix(14, '#272422'));
-  st.setProperty('--elev2', mix(18, '#302d2a'));
-  st.setProperty('--user', mix(22, '#2c2926'));
-  st.setProperty('--line', mix(22, 'rgba(255,236,214,.08)'));
-  st.setProperty('--line2', mix(35, 'rgba(255,236,214,.15)'));
-  st.setProperty('--term', mix(5, '#121110'));
+  for (const [name, value] of Object.entries(DARK)) st.setProperty(name, value);
 }
 
 /** Resolved background color for canvases that cannot read CSS variables (xterm WebGL). */
