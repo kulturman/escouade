@@ -4,7 +4,7 @@ Les changements visibles d'Escouade, version par version. Les notes de chaque re
 
 Escouade K, le fork de kulturman, part d'Escouade 1.7.9 : sa 2.0.0 reprend tout ce qu'Escouade avait de plus au 2026-10-16, et ajoute ses propres features.
 
-## [Non publié]
+## [2.1.0] — 2026-10-19
 
 ### Ajouts
 
